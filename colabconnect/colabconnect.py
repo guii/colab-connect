@@ -268,13 +268,13 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080) -> None:
     try:
         # Try with proxy first
         print(f"Downloading VSCode CLI using proxy: {proxy_string}")
-        curl_cmd = f"curl -Lk --proxy '{proxy_string}' 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz"
+        curl_cmd = f"curl -Lk --proxy {proxy_string} https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64 --output vscode_cli.tar.gz"
         result = subprocess.run(curl_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         if result.returncode != 0:
             print(f"Proxy download failed: {result.stderr.decode('utf-8')}")
             print("Trying direct download...")
-            direct_cmd = "curl -Lk 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz"
+            direct_cmd = "curl -Lk https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64 --output vscode_cli.tar.gz"
             direct_result = subprocess.run(direct_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if direct_result.returncode == 0:
                 print("Direct download successful")
@@ -288,7 +288,7 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080) -> None:
         print(f"Error during download: {str(e)}")
         print("Trying direct download...")
         try:
-            direct_cmd = "curl -Lk 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz"
+            direct_cmd = "curl -Lk https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64 --output vscode_cli.tar.gz"
             direct_result = subprocess.run(direct_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if direct_result.returncode == 0:
                 print("Direct download successful")
