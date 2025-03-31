@@ -127,3 +127,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+proxychains-ng/
+proxychains_vscode_implementation.md
+proxychains_vscode.conf
