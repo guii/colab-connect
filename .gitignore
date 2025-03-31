@@ -131,3 +131,7 @@ dmypy.json
 proxychains-ng/
 proxychains_vscode_implementation.md
 proxychains_vscode.conf
+vscode_tunnel_error_summary.md
+dns_resolution_solution_plan.md
+dns_resolution_analysis.md
+disable_proxy_dns_implementation.md
