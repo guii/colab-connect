@@ -72,9 +72,16 @@ colabconnect(
     proxy_port=8080,
     enable_proxy_dns=False,  # Disable proxy_dns to use local DNS resolution
     use_tls_tunnel=True,     # Enable TLS tunneling with socat
-    tls_port=443             # Port for TLS connection (usually 443)
+    tls_port=443,            # Port for TLS connection (usually 443)
+    force_tls_tunnel=True    # Force using the TLS tunnel even if tests fail
 )
 ```
+
+If you're experiencing issues with the TLS tunnel, you can try:
+
+1. Setting `force_tls_tunnel=True` to force using the tunnel even if tests fail
+2. Using a different TLS port (some proxies use ports other than 443 for TLS)
+3. Disabling `enable_proxy_dns` to use local DNS resolution
 
 This approach:
 1. Installs socat if not already installed

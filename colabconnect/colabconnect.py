@@ -155,35 +155,117 @@ def test_proxychains(proxy_url, proxy_port, enable_proxy_dns=True, use_tls_tunne
         enable_proxy_dns (bool): Whether to enable proxy_dns in config
         use_tls_tunnel (bool): Whether to use local socat TLS tunnel
         local_port (int): The local port for socat tunnel
+        
+    Returns:
+        bool: True if proxychains test was successful, False otherwise
     """
     print("Testing proxychains-ng with a simple command...")
+    
+    # Create proxychains config
     config_path = create_proxychains_config(
         proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, local_port
     )
-    test_command = f"proxychains4 -f {config_path} curl -s https://ifconfig.me"
     
-    try:
-        result = subprocess.run(
-            test_command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30
-        )
+    # Try different test URLs in case one is blocked
+    test_urls = [
+        "https://ifconfig.me",
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://checkip.amazonaws.com"
+    ]
+    
+    # Try each URL
+    for test_url in test_urls:
+        print(f"Testing proxychains with URL: {test_url}")
+        test_command = f"proxychains4 -f {config_path} curl -s {test_url}"
         
-        if result.returncode == 0:
-            print(f"Proxychains test successful! External IP: {result.stdout.decode('utf-8').strip()}")
-            return True
-        else:
-            print(f"Proxychains test failed with return code {result.returncode}")
-            print(f"Error output: {result.stderr.decode('utf-8')}")
-            return False
-    except subprocess.TimeoutExpired:
-        print("Proxychains test timed out after 30 seconds")
-        return False
-    except Exception as e:
-        print(f"Proxychains test failed with exception: {str(e)}")
-        return False
+        # Try up to 3 times with each URL
+        for attempt in range(1, 4):
+            try:
+                print(f"Attempt {attempt} of 3...")
+                result = subprocess.run(
+                    test_command,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30
+                )
+                
+                if result.returncode == 0:
+                    print(f"Proxychains test successful! External IP: {result.stdout.decode('utf-8').strip()}")
+                    return True
+                else:
+                    print(f"Proxychains test failed with return code {result.returncode}")
+                    print(f"Error output: {result.stderr.decode('utf-8')}")
+                    
+                    # If using TLS tunnel, try a direct HTTP request to the tunnel to see if it's working
+                    if use_tls_tunnel and attempt == 1:
+                        print("Testing direct connection to socat tunnel...")
+                        direct_test = f"curl -v --proxy http://127.0.0.1:{local_port} {test_url}"
+                        try:
+                            direct_result = subprocess.run(
+                                direct_test,
+                                shell=True,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=10
+                            )
+                            if direct_result.returncode == 0:
+                                print("Direct connection to socat tunnel works, but proxychains fails.")
+                                print("This suggests an issue with proxychains configuration.")
+                            else:
+                                print("Direct connection to socat tunnel also fails.")
+                                print("This suggests an issue with the socat tunnel itself.")
+                        except Exception as e:
+                            print(f"Error testing direct connection: {str(e)}")
+                    
+                    # Wait before retrying
+                    if attempt < 3:
+                        print(f"Waiting 2 seconds before retry...")
+                        time.sleep(2)
+            except subprocess.TimeoutExpired:
+                print(f"Proxychains test timed out after 30 seconds on attempt {attempt}")
+                if attempt < 3:
+                    print(f"Waiting 2 seconds before retry...")
+                    time.sleep(2)
+            except Exception as e:
+                print(f"Proxychains test failed with exception: {str(e)}")
+                if attempt < 3:
+                    print(f"Waiting 2 seconds before retry...")
+                    time.sleep(2)
+    
+    # If we get here, all URLs and attempts failed
+    print("All proxychains tests failed after multiple attempts with different URLs.")
+    
+    # If using TLS tunnel, provide additional debugging information
+    if use_tls_tunnel:
+        print("\nDebugging TLS tunnel:")
+        print("1. Verify that your proxy supports TLS connections on the specified port")
+        print("2. Check if your proxy requires authentication")
+        print("3. Try using a different TLS port (default is 443)")
+        print("4. Check if your proxy allows connections to the test URLs")
+        
+        # Try a simple HTTP request through the tunnel to see if it's working at all
+        print("\nTesting basic HTTP connectivity through tunnel...")
+        try:
+            http_test = f"curl -v --proxy http://127.0.0.1:{local_port} http://example.com"
+            http_result = subprocess.run(
+                http_test,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10
+            )
+            if http_result.returncode == 0:
+                print("Basic HTTP connectivity through tunnel works!")
+                print("This suggests an issue with HTTPS/TLS connections specifically.")
+            else:
+                print("Basic HTTP connectivity through tunnel fails.")
+                print("This suggests a fundamental issue with the tunnel configuration.")
+        except Exception as e:
+            print(f"Error testing HTTP connectivity: {str(e)}")
+    
+    return False
 
 
 def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
@@ -203,6 +285,7 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
     
     # Clean proxy URL (remove protocol prefix)
     clean_proxy_url = strip_protocol(proxy_url)
+    original_hostname = clean_proxy_url
     
     # Resolve hostname to IP if it's not already an IP
     proxy_ip = clean_proxy_url
@@ -211,8 +294,21 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
         if resolved_ip:
             proxy_ip = resolved_ip
     
-    # Command to start socat tunnel
-    cmd = f"socat TCP-LISTEN:{local_port},bind=127.0.0.1,fork,reuseaddr OPENSSL:{proxy_ip}:{proxy_port}"
+    # Enhanced socat command with improved TLS parameters
+    # - verify=0: Disable certificate verification (often needed for corporate proxies)
+    # - method=TLS: Use TLS protocol (or TLSv1.2 for better compatibility)
+    # - sni-hostname: Set SNI to the original hostname
+    # - alpn=http/1.1: Set ALPN to HTTP/1.1 (common for proxies)
+    # - cipher: Set allowed ciphers
+    # - ignoreeof: Prevent EOF from closing the connection
+    # - nodelay: Disable Nagle algorithm for better performance
+    # - verbose: Enable verbose logging for debugging
+    cmd = (
+        f"socat -v TCP-LISTEN:{local_port},bind=127.0.0.1,fork,reuseaddr,nodelay "
+        f"OPENSSL:{proxy_ip}:{proxy_port},verify=0,method=TLSv1.2,sni-hostname={original_hostname},"
+        f"alpn=http/1.1,cipher=HIGH:!aNULL:!eNULL:!EXPORT:!DES:!MD5:!PSK:!RC4,"
+        f"ignoreeof=1,nodelay=1,connect-timeout=10"
+    )
     print(f"Starting socat TLS tunnel: {cmd}")
     
     try:
@@ -226,12 +322,36 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
         )
         
         # Give it a moment to start
-        time.sleep(1)
+        time.sleep(2)
         
         # Check if process is still running
         if process.poll() is None:
             print(f"Socat TLS tunnel started successfully on 127.0.0.1:{local_port}")
-            return process
+            
+            # Test the tunnel directly
+            print("Testing socat tunnel with a direct connection...")
+            test_cmd = f"curl -v --proxy http://127.0.0.1:{local_port} https://ifconfig.me"
+            try:
+                test_result = subprocess.run(
+                    test_cmd,
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10
+                )
+                
+                if test_result.returncode == 0:
+                    print(f"Socat tunnel test successful! Response: {test_result.stdout.decode('utf-8').strip()}")
+                    return process
+                else:
+                    print(f"Socat tunnel test failed with return code {test_result.returncode}")
+                    print(f"Error output: {test_result.stderr.decode('utf-8')}")
+                    # Continue anyway as proxychains might still work
+                    return process
+            except Exception as e:
+                print(f"Error testing socat tunnel: {str(e)}")
+                # Continue anyway as the tunnel is running
+                return process
         else:
             stdout, stderr = process.communicate()
             print(f"Socat failed to start: {stderr}")
@@ -240,7 +360,8 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
         print(f"Error starting socat: {str(e)}")
         return None
 
-def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls_tunnel=False, tls_port=443) -> None:
+def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls_tunnel=False,
+                tls_port=443, force_tls_tunnel=False) -> None:
     """
     Start the VSCode tunnel using proxychains-ng.
     
@@ -250,6 +371,7 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls
         enable_proxy_dns (bool): Whether to enable proxy_dns in config
         use_tls_tunnel (bool): Whether to use socat TLS tunnel
         tls_port (int): The port to use for TLS connection to proxy (usually 443)
+        force_tls_tunnel (bool): Whether to force using the TLS tunnel even if tests fail
     """
     # Check if proxychains-ng is installed
     if not check_proxychains_installed():
@@ -270,12 +392,19 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls
         
         # Test if proxychains is working with the given proxy
         use_proxychains = test_proxychains(proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, local_port)
+        
+        # If proxychains test failed but force_tls_tunnel is enabled, continue using the tunnel anyway
         if not use_proxychains:
-            print("WARNING: proxychains-ng test failed. Falling back to direct connection.")
-            # Kill socat process if it was started
-            if socat_process:
-                socat_process.terminate()
-                socat_process = None
+            if force_tls_tunnel and socat_process and use_tls_tunnel:
+                print("WARNING: proxychains-ng test failed, but force_tls_tunnel is enabled.")
+                print("Continuing with TLS tunnel despite test failure...")
+                use_proxychains = True
+            else:
+                print("WARNING: proxychains-ng test failed. Falling back to direct connection.")
+                # Kill socat process if it was started
+                if socat_process:
+                    socat_process.terminate()
+                    socat_process = None
     
     # Prepare the command
     base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
@@ -408,7 +537,8 @@ def verify_vscode_cli():
 
 def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
                 enable_proxy_dns=True, test_github_dns_resolution=False,
-                use_system_hosts=False, use_tls_tunnel=False, tls_port=443) -> None:
+                use_system_hosts=False, use_tls_tunnel=False, tls_port=443,
+                force_tls_tunnel=False) -> None:
     """
     Connect to VSCode tunnel through a corporate proxy.
     
@@ -420,6 +550,7 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
         use_system_hosts (bool): Whether to update the system hosts file (default: False)
         use_tls_tunnel (bool): Whether to use socat to create a TLS tunnel to the proxy (default: False)
         tls_port (int): The port to use for TLS connection to proxy (default: 443)
+        force_tls_tunnel (bool): Whether to force using the TLS tunnel even if tests fail (default: False)
     """
 
     print("Installing python libraries...")
@@ -497,7 +628,7 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     clean_proxy_url = strip_protocol(proxy_url)
     
     print("Starting the tunnel")
-    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, tls_port)
+    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, tls_port, force_tls_tunnel)
 def test_github_dns_cli():
     """
     Command-line interface for testing GitHub DNS resolution.
