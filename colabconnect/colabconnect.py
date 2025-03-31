@@ -41,8 +41,20 @@ def check_proxychains_installed():
         return False
 
 
+def strip_protocol(url):
+    """Strip protocol prefix from URL."""
+    if url.startswith("http://"):
+        return url[7:]
+    elif url.startswith("https://"):
+        return url[8:]
+    return url
+
+
 def resolve_hostname(hostname):
     """Resolve hostname to IP address."""
+    # Strip protocol prefix if present
+    hostname = strip_protocol(hostname)
+    
     try:
         print(f"Resolving hostname: {hostname}")
         ip_address = socket.gethostbyname(hostname)
@@ -57,14 +69,17 @@ def create_proxychains_config(proxy_url="proxy.company.com", proxy_port=8080):
     """Create a custom proxychains.conf file for VSCode tunnel."""
     config_path = Path("proxychains_vscode.conf")
     
+    # Strip protocol prefix if present
+    clean_proxy_url = strip_protocol(proxy_url)
+    
     # Resolve hostname to IP address if it's not already an IP
-    proxy_ip = proxy_url
-    if not all(c.isdigit() or c == '.' for c in proxy_url):
-        resolved_ip = resolve_hostname(proxy_url)
+    proxy_ip = clean_proxy_url
+    if not all(c.isdigit() or c == '.' for c in clean_proxy_url):
+        resolved_ip = resolve_hostname(clean_proxy_url)
         if resolved_ip:
             proxy_ip = resolved_ip
         else:
-            print(f"WARNING: Could not resolve {proxy_url} to an IP address. Proxychains requires numeric IPs.")
+            print(f"WARNING: Could not resolve {clean_proxy_url} to an IP address. Proxychains requires numeric IPs.")
             print("Using the hostname anyway, but it will likely fail.")
     
     config_content = f"""# proxychains.conf for VSCode tunnel
@@ -320,5 +335,8 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080) -> None:
         print("ERROR: VSCode CLI not found. Cannot start tunnel.")
         return
     
+    # Strip protocol prefix for proxychains
+    clean_proxy_url = strip_protocol(proxy_url)
+    
     print("Starting the tunnel")
-    start_tunnel(proxy_url, proxy_port)
+    start_tunnel(clean_proxy_url, proxy_port)
