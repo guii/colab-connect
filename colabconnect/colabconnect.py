@@ -93,7 +93,7 @@ tcp_connect_time_out 8000
 
 [ProxyList]
 # Corporate HTTP proxy
-http {proxy_ip} {proxy_port}
+http {proxy_ip} {proxy_port} connect
 """
     
     with open(config_path, "w") as f:
