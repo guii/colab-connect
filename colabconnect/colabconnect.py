@@ -198,8 +198,7 @@ def run(command: str) -> None:
     if process.returncode == 0:
         print(f"Ran: {command}")
 
-def is_colab():
-    return 'google.colab' in sys.modules
+
 
 def colabconnect(proxy_url="proxy.company.com", proxy_port=8080) -> None:
     """
@@ -209,17 +208,6 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080) -> None:
         proxy_url (str): The URL of the corporate proxy (default: proxy.company.com)
         proxy_port (int): The port of the corporate proxy (default: 8080)
     """
-    if is_colab():
-        print("Mounting Google Drive...")
-        drive = import_module("google.colab.drive")
-        drive.mount("/content/drive")
-    
-        # Create a folder on drive to store all the code files
-        drive_folder = '/content/drive/MyDrive/colab/'
-        Path(drive_folder).mkdir(parents=True, exist_ok=True)
-    
-        # Make a /colab path to easily access the folder
-        run(f'ln -s {drive_folder} /')
 
     print("Installing python libraries...")
     run("pip3 install --user flake8 black ipywidgets twine")
