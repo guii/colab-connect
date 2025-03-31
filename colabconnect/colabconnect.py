@@ -14,7 +14,6 @@ message = """
 - Select: 'Remote-Tunnels: Connect to Tunnel' to connect to colab
 """.strip()
 
-
 def check_proxychains_installed():
     """Check if proxychains-ng is installed and install it if not."""
     if shutil.which("proxychains4"):
@@ -38,6 +37,29 @@ def check_proxychains_installed():
         return True
     else:
         print("Failed to install proxychains-ng")
+        return False
+
+
+def check_socat_installed():
+    """Check if socat is installed and install it if not."""
+    if shutil.which("socat"):
+        print("socat is already installed")
+        return True
+    
+    print("Installing socat...")
+    try:
+        subprocess.run(["apt-get", "update"], check=True)
+        subprocess.run(["apt-get", "install", "-y", "socat"], check=True)
+        
+        if shutil.which("socat"):
+            print("socat installed successfully")
+            return True
+        else:
+            print("Failed to install socat")
+            return False
+    except Exception as e:
+        print(f"Error installing socat: {str(e)}")
+        return False
         return False
 
 
@@ -65,22 +87,42 @@ def resolve_hostname(hostname):
         return None
 
 
-def create_proxychains_config(proxy_url="proxy.company.com", proxy_port=8080, enable_proxy_dns=True):
-    """Create a custom proxychains.conf file for VSCode tunnel."""
+def create_proxychains_config(proxy_url="proxy.company.com", proxy_port=8080,
+                             enable_proxy_dns=True, use_tls_tunnel=False,
+                             local_port=24351):
+    """
+    Create a custom proxychains.conf file for VSCode tunnel.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy
+        enable_proxy_dns (bool): Whether to enable proxy_dns in config
+        use_tls_tunnel (bool): Whether to use local socat TLS tunnel
+        local_port (int): The local port for socat tunnel
+        
+    Returns:
+        Path: Path to the created config file
+    """
     config_path = Path("proxychains_vscode.conf")
     
-    # Strip protocol prefix if present
-    clean_proxy_url = strip_protocol(proxy_url)
-    
-    # Resolve hostname to IP address if it's not already an IP
-    proxy_ip = clean_proxy_url
-    if not all(c.isdigit() or c == '.' for c in clean_proxy_url):
-        resolved_ip = resolve_hostname(clean_proxy_url)
-        if resolved_ip:
-            proxy_ip = resolved_ip
-        else:
-            print(f"WARNING: Could not resolve {clean_proxy_url} to an IP address. Proxychains requires numeric IPs.")
-            print("Using the hostname anyway, but it will likely fail.")
+    # If using TLS tunnel, point to localhost with the local port
+    if use_tls_tunnel:
+        proxy_ip = "127.0.0.1"
+        proxy_port_to_use = local_port
+        print(f"Configuring proxychains to use local socat tunnel at {proxy_ip}:{proxy_port_to_use}")
+    else:
+        # Original behavior - resolve hostname to IP
+        clean_proxy_url = strip_protocol(proxy_url)
+        proxy_ip = clean_proxy_url
+        proxy_port_to_use = proxy_port
+        
+        if not all(c.isdigit() or c == '.' for c in clean_proxy_url):
+            resolved_ip = resolve_hostname(clean_proxy_url)
+            if resolved_ip:
+                proxy_ip = resolved_ip
+            else:
+                print(f"WARNING: Could not resolve {clean_proxy_url} to an IP address. Proxychains requires numeric IPs.")
+                print("Using the hostname anyway, but it will likely fail.")
     
     # Determine whether to include proxy_dns based on parameter
     dns_setting = "proxy_dns" if enable_proxy_dns else "# proxy_dns disabled"
@@ -93,7 +135,7 @@ tcp_connect_time_out 8000
 
 [ProxyList]
 # Corporate HTTP proxy
-http {proxy_ip} {proxy_port} connect
+http {proxy_ip} {proxy_port_to_use}
 """
     
     with open(config_path, "w") as f:
@@ -103,10 +145,21 @@ http {proxy_ip} {proxy_port} connect
     return config_path.absolute()
 
 
-def test_proxychains(proxy_url, proxy_port, enable_proxy_dns=True):
-    """Test if proxychains-ng is working correctly with the given proxy."""
+def test_proxychains(proxy_url, proxy_port, enable_proxy_dns=True, use_tls_tunnel=False, local_port=24351):
+    """
+    Test if proxychains-ng is working correctly with the given proxy.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy
+        enable_proxy_dns (bool): Whether to enable proxy_dns in config
+        use_tls_tunnel (bool): Whether to use local socat TLS tunnel
+        local_port (int): The local port for socat tunnel
+    """
     print("Testing proxychains-ng with a simple command...")
-    config_path = create_proxychains_config(proxy_url, proxy_port, enable_proxy_dns)
+    config_path = create_proxychains_config(
+        proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, local_port
+    )
     test_command = f"proxychains4 -f {config_path} curl -s https://ifconfig.me"
     
     try:
@@ -133,27 +186,110 @@ def test_proxychains(proxy_url, proxy_port, enable_proxy_dns=True):
         return False
 
 
-def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None:
-    """Start the VSCode tunnel using proxychains-ng."""
+def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
+    """
+    Start a socat tunnel that forwards traffic from a local port to the proxy over TLS.
+    
+    Args:
+        proxy_url (str): The URL of the proxy server
+        proxy_port (int): The port of the proxy server for TLS (usually 443)
+        local_port (int): The local port to listen on (default: 24351)
+        
+    Returns:
+        subprocess.Popen: The socat process, or None if failed
+    """
+    if not check_socat_installed():
+        return None
+    
+    # Clean proxy URL (remove protocol prefix)
+    clean_proxy_url = strip_protocol(proxy_url)
+    
+    # Resolve hostname to IP if it's not already an IP
+    proxy_ip = clean_proxy_url
+    if not all(c.isdigit() or c == '.' for c in clean_proxy_url):
+        resolved_ip = resolve_hostname(clean_proxy_url)
+        if resolved_ip:
+            proxy_ip = resolved_ip
+    
+    # Command to start socat tunnel
+    cmd = f"socat TCP-LISTEN:{local_port},bind=127.0.0.1,fork,reuseaddr OPENSSL:{proxy_ip}:{proxy_port}"
+    print(f"Starting socat TLS tunnel: {cmd}")
+    
+    try:
+        # Start socat in the background
+        process = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
+        
+        # Give it a moment to start
+        time.sleep(1)
+        
+        # Check if process is still running
+        if process.poll() is None:
+            print(f"Socat TLS tunnel started successfully on 127.0.0.1:{local_port}")
+            return process
+        else:
+            stdout, stderr = process.communicate()
+            print(f"Socat failed to start: {stderr}")
+            return None
+    except Exception as e:
+        print(f"Error starting socat: {str(e)}")
+        return None
+
+def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls_tunnel=False, tls_port=443) -> None:
+    """
+    Start the VSCode tunnel using proxychains-ng.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy (usually 8080)
+        enable_proxy_dns (bool): Whether to enable proxy_dns in config
+        use_tls_tunnel (bool): Whether to use socat TLS tunnel
+        tls_port (int): The port to use for TLS connection to proxy (usually 443)
+    """
     # Check if proxychains-ng is installed
     if not check_proxychains_installed():
         print("WARNING: proxychains-ng is not installed. Falling back to direct connection.")
         use_proxychains = False
+        socat_process = None
     else:
+        # Start socat TLS tunnel if requested
+        socat_process = None
+        local_port = 24351  # Default local port for socat
+        
+        if use_tls_tunnel:
+            print("Setting up TLS tunnel with socat...")
+            socat_process = start_socat_tunnel(proxy_url, tls_port, local_port)
+            if not socat_process:
+                print("WARNING: Failed to start socat TLS tunnel. Falling back to direct proxy.")
+                use_tls_tunnel = False
+        
         # Test if proxychains is working with the given proxy
-        use_proxychains = test_proxychains(proxy_url, proxy_port, enable_proxy_dns)
+        use_proxychains = test_proxychains(proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, local_port)
         if not use_proxychains:
             print("WARNING: proxychains-ng test failed. Falling back to direct connection.")
+            # Kill socat process if it was started
+            if socat_process:
+                socat_process.terminate()
+                socat_process = None
     
     # Prepare the command
     base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
     
     if use_proxychains:
-        config_path = create_proxychains_config(proxy_url, proxy_port, enable_proxy_dns)
+        config_path = create_proxychains_config(
+            proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, local_port
+        )
         command = f"proxychains4 -f {config_path} {base_command}"
         print(f"Starting VSCode tunnel with proxychains-ng using config: {config_path}")
         if not enable_proxy_dns:
             print("Note: proxy_dns is disabled in proxychains configuration")
+        if use_tls_tunnel:
+            print("Note: Using socat TLS tunnel for secure proxy connection")
     else:
         command = base_command
         print("Starting VSCode tunnel directly (without proxychains-ng)")
@@ -187,6 +323,11 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None
     
     # Wait for the process to complete
     p.wait()
+    
+    # Terminate socat process if it was started
+    if socat_process:
+        print("Terminating socat TLS tunnel...")
+        socat_process.terminate()
     
     # Check the return code
     if p.returncode != 0:
@@ -267,7 +408,7 @@ def verify_vscode_cli():
 
 def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
                 enable_proxy_dns=True, test_github_dns_resolution=False,
-                use_system_hosts=False) -> None:
+                use_system_hosts=False, use_tls_tunnel=False, tls_port=443) -> None:
     """
     Connect to VSCode tunnel through a corporate proxy.
     
@@ -277,6 +418,8 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
         enable_proxy_dns (bool): Whether to enable proxy_dns in proxychains config (default: True)
         test_github_dns_resolution (bool): Whether to test GitHub DNS resolution (default: False)
         use_system_hosts (bool): Whether to update the system hosts file (default: False)
+        use_tls_tunnel (bool): Whether to use socat to create a TLS tunnel to the proxy (default: False)
+        tls_port (int): The port to use for TLS connection to proxy (default: 443)
     """
 
     print("Installing python libraries...")
@@ -354,7 +497,7 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     clean_proxy_url = strip_protocol(proxy_url)
     
     print("Starting the tunnel")
-    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns)
+    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, tls_port)
 def test_github_dns_cli():
     """
     Command-line interface for testing GitHub DNS resolution.

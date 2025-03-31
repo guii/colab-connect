@@ -44,6 +44,49 @@ colabconnect()
 </p>
 
 5. You will be connected to the virtual machine and can access the folders. Open the `/colab` folder and store your code there for persistence on Google Drive. The workflow is similar to the Remote SSH plugin
-
 ![image](https://user-images.githubusercontent.com/8587189/232769273-52d3e26a-3aec-436d-9b60-97e1d190ddf7.png)
+
+## Corporate Proxy Support
+
+If you're behind a corporate proxy, you can specify the proxy details:
+
+```python
+from colabconnect import colabconnect
+
+colabconnect(
+    proxy_url="proxy.company.com",
+    proxy_port=8080,
+    enable_proxy_dns=True
+)
+```
+
+### TLS Proxy Tunneling
+
+If you're experiencing TLS handshake issues when connecting through a corporate proxy, you can use the TLS tunneling feature which creates a secure TLS connection to your proxy:
+
+```python
+from colabconnect import colabconnect
+
+colabconnect(
+    proxy_url="proxy.company.com",
+    proxy_port=8080,
+    enable_proxy_dns=False,  # Disable proxy_dns to use local DNS resolution
+    use_tls_tunnel=True,     # Enable TLS tunneling with socat
+    tls_port=443             # Port for TLS connection (usually 443)
+)
+```
+
+This approach:
+1. Installs socat if not already installed
+2. Creates a TLS tunnel using socat from local port 24351 to your proxy over TLS
+3. Configures proxychains to use the local socat listener
+4. Starts the VSCode tunnel through the TLS tunnel
+
+This can help resolve issues like the following error:
+```
+error:0A000126:SSL routines::unexpected eof while reading
+```
+
+For a complete example, see the [tls_tunnel_example.py](tls_tunnel_example.py) file.
+
 
