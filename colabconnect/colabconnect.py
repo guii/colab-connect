@@ -84,6 +84,7 @@ def create_proxychains_config(proxy_url="proxy.company.com", proxy_port=8080):
     
     config_content = f"""# proxychains.conf for VSCode tunnel
 dynamic_chain
+proxy_dns
 tcp_read_time_out 15000
 tcp_connect_time_out 8000
 
