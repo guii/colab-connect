@@ -339,6 +339,22 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
                 print("Extraction successful")
         except Exception as e:
             print(f"Error during extraction: {str(e)}")
+    
+    # Verify VSCode CLI is available
+    if not verify_vscode_cli():
+        print("ERROR: VSCode CLI not found. Cannot start tunnel.")
+        return
+    
+    # Test GitHub DNS resolution if requested
+    if test_github_dns_resolution:
+        print("Testing GitHub DNS resolution before starting tunnel...")
+        test_github_dns(use_system_hosts)
+    
+    # Strip protocol prefix for proxychains
+    clean_proxy_url = strip_protocol(proxy_url)
+    
+    print("Starting the tunnel")
+    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns)
 def test_github_dns_cli():
     """
     Command-line interface for testing GitHub DNS resolution.
