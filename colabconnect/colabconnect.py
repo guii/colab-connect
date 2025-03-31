@@ -197,7 +197,7 @@ def start_tunnel(proxy_url=None, proxy_port=None) -> None:
 
 def start_tunnel_direct():
     """Start the VSCode tunnel directly without proxychains-ng."""
-    command = "./code tunnel --accept-server-license-terms --name colab-connect"
+    command = "./code tunnel --accept-server-license-terms --verbose --name colab-connect --log debug"
     print(f"Starting VSCode tunnel directly: {command}")
     
     p = subprocess.Popen(
