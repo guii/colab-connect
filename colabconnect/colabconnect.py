@@ -268,7 +268,7 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080) -> None:
     try:
         # Try with proxy first
         print(f"Downloading VSCode CLI using proxy: {proxy_string}")
-        curl_cmd = f"curl -Lk --proxy {proxy_string} https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64 --output vscode_cli.tar.gz"
+        curl_cmd = f"curl -Lk --proxy '{proxy_string}' 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz"
         result = subprocess.run(curl_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         if result.returncode != 0:
