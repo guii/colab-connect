@@ -143,7 +143,7 @@ def start_tunnel(proxy_url=None, proxy_port=None) -> None:
             print("WARNING: proxychains-ng test failed. Falling back to direct connection.")
     
     # Prepare the command
-    base_command = "./code tunnel --accept-server-license-terms --name colab-connect"
+    base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
     
     if use_proxychains:
         config_path = create_proxychains_config(proxy_url, proxy_port)
