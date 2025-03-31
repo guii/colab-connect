@@ -269,20 +269,36 @@ def test_proxychains(proxy_url, proxy_port, enable_proxy_dns=True, use_tls_tunne
     return False
 
 
-def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
+def find_available_port():
+    """
+    Find an available port on the local machine.
+    
+    Returns:
+        int: An available port number
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+def start_socat_tunnel(proxy_url, proxy_port, local_port=None):
     """
     Start a socat tunnel that forwards traffic from a local port to the proxy over TLS.
     
     Args:
         proxy_url (str): The URL of the proxy server
         proxy_port (int): The port of the proxy server for TLS (usually 443)
-        local_port (int): The local port to listen on (default: 24351)
+        local_port (int): The local port to listen on (if None, an available port will be found)
         
     Returns:
-        subprocess.Popen: The socat process, or None if failed
+        tuple: (subprocess.Popen, int) - The socat process and the local port, or (None, None) if failed
     """
     if not check_socat_installed():
-        return None
+        return None, None
+    
+    # Find an available port if not specified
+    if local_port is None:
+        local_port = find_available_port()
+        print(f"Found available port: {local_port}")
     
     # Clean proxy URL (remove protocol prefix)
     clean_proxy_url = strip_protocol(proxy_url)
@@ -340,7 +356,7 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
                     
                     if test_result.returncode == 0:
                         print(f"Socat tunnel test successful! Response: {test_result.stdout.decode('utf-8').strip()}")
-                        return process
+                        return process, local_port
                     else:
                         print(f"Socat tunnel test failed with return code {test_result.returncode}")
                         print(f"Error output: {test_result.stderr.decode('utf-8')}")
@@ -348,7 +364,7 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
                         # If this is the last attempt, return the process anyway
                         if attempt == 3:
                             print("All socat tunnel approaches failed, but returning the last one anyway.")
-                            return process
+                            return process, local_port
                         
                         # Otherwise, terminate this process and try the next approach
                         process.terminate()
@@ -359,7 +375,7 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
                     # If this is the last attempt, return the process anyway
                     if attempt == 3:
                         print("All socat tunnel approaches failed, but returning the last one anyway.")
-                        return process
+                        return process, local_port
                     
                     # Otherwise, terminate this process and try the next approach
                     process.terminate()
@@ -371,7 +387,7 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
                 # If this is the last attempt, return None
                 if attempt == 3:
                     print("All socat tunnel approaches failed.")
-                    return None
+                    return None, None
             
             # Try a different approach for the next attempt
             if attempt == 1:
@@ -398,10 +414,10 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
             # If this is the last attempt, return None
             if attempt == 3:
                 print("All socat tunnel approaches failed.")
-                return None
+                return None, None
     
     # If we get here, all attempts failed
-    return None
+    return None, None
 
 def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls_tunnel=False,
                 tls_port=443, force_tls_tunnel=False) -> None:
@@ -424,14 +440,15 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls
     else:
         # Start socat TLS tunnel if requested
         socat_process = None
-        local_port = 24351  # Default local port for socat
+        local_port = None  # Will be determined dynamically
         
         if use_tls_tunnel:
             print("Setting up TLS tunnel with socat...")
-            socat_process = start_socat_tunnel(proxy_url, tls_port, local_port)
+            socat_process, local_port = start_socat_tunnel(proxy_url, tls_port, local_port)
             if not socat_process:
                 print("WARNING: Failed to start socat TLS tunnel. Falling back to direct proxy.")
                 use_tls_tunnel = False
+                local_port = None
         
         # Test if proxychains is working with the given proxy
         use_proxychains = test_proxychains(proxy_url, proxy_port, enable_proxy_dns, use_tls_tunnel, local_port)

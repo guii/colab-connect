@@ -76,8 +76,9 @@ colabconnect(
     force_tls_tunnel=True    # Force using the TLS tunnel even if tests fail
 )
 ```
+The TLS tunneling feature now includes multiple fallback mechanisms and improvements:
 
-The TLS tunneling feature now includes multiple fallback mechanisms:
+1. **Automatic port selection** - Dynamically finds an available port for the socat tunnel
 
 1. **HTTP PROXY mode** - Uses the HTTP CONNECT method through the proxy (best for most corporate proxies)
 2. **Direct TCP mode** - Simple TCP forwarding without TLS (fallback if HTTP PROXY fails)
