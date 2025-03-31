@@ -260,7 +260,13 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080) -> None:
     run("apt install htop -y")
 
     # Proxy string for curl
-    proxy_string = f"http://{proxy_url}:{proxy_port}"
+    # Check if proxy_url already includes a protocol prefix
+    if proxy_url.startswith("http://") or proxy_url.startswith("https://"):
+        proxy_string = f"{proxy_url}:{proxy_port}"
+    else:
+        proxy_string = f"http://{proxy_url}:{proxy_port}"
+    
+    print(f"Using proxy: {proxy_string}")
     
     print("Installing vscode-cli...")
     vscode_cli_downloaded = False
