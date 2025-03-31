@@ -168,6 +168,7 @@ def test_proxychains(proxy_url, proxy_port, enable_proxy_dns=True, use_tls_tunne
     
     # Try different test URLs in case one is blocked
     test_urls = [
+        "https://github.com",
         "https://ifconfig.me",
         "https://api.ipify.org",
         "https://icanhazip.com",
@@ -294,71 +295,113 @@ def start_socat_tunnel(proxy_url, proxy_port, local_port=24351):
         if resolved_ip:
             proxy_ip = resolved_ip
     
-    # Enhanced socat command with improved TLS parameters
-    # - verify=0: Disable certificate verification (often needed for corporate proxies)
-    # - method=TLS: Use TLS protocol (or TLSv1.2 for better compatibility)
-    # - sni-hostname: Set SNI to the original hostname
-    # - alpn=http/1.1: Set ALPN to HTTP/1.1 (common for proxies)
-    # - cipher: Set allowed ciphers
-    # - ignoreeof: Prevent EOF from closing the connection
-    # - nodelay: Disable Nagle algorithm for better performance
-    # - verbose: Enable verbose logging for debugging
+    # Try a different approach using HTTP PROXY mode instead of direct TLS
+    # This uses the HTTP CONNECT method which is what proxychains is trying to do anyway
+    # This might work better with corporate proxies that don't allow direct TLS connections
+    print("Using HTTP PROXY mode with socat instead of direct TLS connection")
+    
+    # First, try the HTTP PROXY approach
     cmd = (
         f"socat -v TCP-LISTEN:{local_port},bind=127.0.0.1,fork,reuseaddr,nodelay "
-        f"OPENSSL:{proxy_ip}:{proxy_port},verify=0,method=TLSv1.2,sni-hostname={original_hostname},"
-        f"alpn=http/1.1,cipher=HIGH:!aNULL:!eNULL:!EXPORT:!DES:!MD5:!PSK:!RC4,"
-        f"ignoreeof=1,nodelay=1,connect-timeout=10"
+        f"PROXY:{proxy_ip}:{proxy_port}:github.com:443,proxyport={proxy_port},resolve"
     )
-    print(f"Starting socat TLS tunnel: {cmd}")
+    print(f"Starting socat tunnel (attempt 1 - HTTP PROXY mode): {cmd}")
     
-    try:
-        # Start socat in the background
-        process = subprocess.Popen(
-            cmd,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True
-        )
-        
-        # Give it a moment to start
-        time.sleep(2)
-        
-        # Check if process is still running
-        if process.poll() is None:
-            print(f"Socat TLS tunnel started successfully on 127.0.0.1:{local_port}")
+    # Try multiple approaches in sequence until one works
+    for attempt in range(1, 4):
+        try:
+            # Start socat in the background
+            process = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
             
-            # Test the tunnel directly
-            print("Testing socat tunnel with a direct connection...")
-            test_cmd = f"curl -v --proxy http://127.0.0.1:{local_port} https://ifconfig.me"
-            try:
-                test_result = subprocess.run(
-                    test_cmd,
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=10
-                )
+            # Give it a moment to start
+            time.sleep(2)
+            
+            # Check if process is still running
+            if process.poll() is None:
+                print(f"Socat tunnel started successfully on 127.0.0.1:{local_port}")
                 
-                if test_result.returncode == 0:
-                    print(f"Socat tunnel test successful! Response: {test_result.stdout.decode('utf-8').strip()}")
-                    return process
-                else:
-                    print(f"Socat tunnel test failed with return code {test_result.returncode}")
-                    print(f"Error output: {test_result.stderr.decode('utf-8')}")
-                    # Continue anyway as proxychains might still work
-                    return process
-            except Exception as e:
-                print(f"Error testing socat tunnel: {str(e)}")
-                # Continue anyway as the tunnel is running
-                return process
-        else:
-            stdout, stderr = process.communicate()
-            print(f"Socat failed to start: {stderr}")
-            return None
-    except Exception as e:
-        print(f"Error starting socat: {str(e)}")
-        return None
+                # Test the tunnel directly
+                print("Testing socat tunnel with a direct connection to github.com...")
+                test_cmd = f"curl -v --proxy http://127.0.0.1:{local_port} https://github.com"
+                try:
+                    test_result = subprocess.run(
+                        test_cmd,
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=10
+                    )
+                    
+                    if test_result.returncode == 0:
+                        print(f"Socat tunnel test successful! Response: {test_result.stdout.decode('utf-8').strip()}")
+                        return process
+                    else:
+                        print(f"Socat tunnel test failed with return code {test_result.returncode}")
+                        print(f"Error output: {test_result.stderr.decode('utf-8')}")
+                        
+                        # If this is the last attempt, return the process anyway
+                        if attempt == 3:
+                            print("All socat tunnel approaches failed, but returning the last one anyway.")
+                            return process
+                        
+                        # Otherwise, terminate this process and try the next approach
+                        process.terminate()
+                        time.sleep(1)
+                except Exception as e:
+                    print(f"Error testing socat tunnel: {str(e)}")
+                    
+                    # If this is the last attempt, return the process anyway
+                    if attempt == 3:
+                        print("All socat tunnel approaches failed, but returning the last one anyway.")
+                        return process
+                    
+                    # Otherwise, terminate this process and try the next approach
+                    process.terminate()
+                    time.sleep(1)
+            else:
+                stdout, stderr = process.communicate()
+                print(f"Socat failed to start: {stderr}")
+                
+                # If this is the last attempt, return None
+                if attempt == 3:
+                    print("All socat tunnel approaches failed.")
+                    return None
+            
+            # Try a different approach for the next attempt
+            if attempt == 1:
+                # Second attempt: Try direct TCP connection (no TLS)
+                print("\nTrying alternative approach (attempt 2 - direct TCP)...")
+                cmd = (
+                    f"socat -v TCP-LISTEN:{local_port},bind=127.0.0.1,fork,reuseaddr "
+                    f"TCP:{proxy_ip}:{proxy_port}"
+                )
+                print(f"Starting socat tunnel (attempt 2 - direct TCP): {cmd}")
+            elif attempt == 2:
+                # Third attempt: Try original OPENSSL approach
+                print("\nTrying alternative approach (attempt 3 - OPENSSL)...")
+                cmd = (
+                    f"socat -v TCP-LISTEN:{local_port},bind=127.0.0.1,fork,reuseaddr,nodelay "
+                    f"OPENSSL:{proxy_ip}:{proxy_port},verify=0,method=TLSv1.2,sni-hostname={original_hostname},"
+                    f"alpn=http/1.1,cipher=HIGH:!aNULL:!eNULL:!EXPORT:!DES:!MD5:!PSK:!RC4,"
+                    f"ignoreeof=1,nodelay=1,connect-timeout=10"
+                )
+                print(f"Starting socat tunnel (attempt 3 - OPENSSL): {cmd}")
+        except Exception as e:
+            print(f"Error starting socat (attempt {attempt}): {str(e)}")
+            
+            # If this is the last attempt, return None
+            if attempt == 3:
+                print("All socat tunnel approaches failed.")
+                return None
+    
+    # If we get here, all attempts failed
+    return None
 
 def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True, use_tls_tunnel=False,
                 tls_port=443, force_tls_tunnel=False) -> None:

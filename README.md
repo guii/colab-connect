@@ -77,11 +77,18 @@ colabconnect(
 )
 ```
 
-If you're experiencing issues with the TLS tunnel, you can try:
+The TLS tunneling feature now includes multiple fallback mechanisms:
+
+1. **HTTP PROXY mode** - Uses the HTTP CONNECT method through the proxy (best for most corporate proxies)
+2. **Direct TCP mode** - Simple TCP forwarding without TLS (fallback if HTTP PROXY fails)
+3. **OPENSSL mode** - Direct TLS connection to the proxy (last resort)
+
+If you're still experiencing issues, you can try:
 
 1. Setting `force_tls_tunnel=True` to force using the tunnel even if tests fail
 2. Using a different TLS port (some proxies use ports other than 443 for TLS)
 3. Disabling `enable_proxy_dns` to use local DNS resolution
+4. If your proxy requires authentication, you may need to modify the code to include authentication credentials
 
 This approach:
 1. Installs socat if not already installed
