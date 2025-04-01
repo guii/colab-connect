@@ -204,6 +204,7 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None
         proxy_port (int): The port of the corporate proxy (usually 8080)
         enable_proxy_dns (bool): Whether to enable proxy_dns in config
     """
+    use_proxychains=True
     # Check if proxychains-ng is installed
     if not check_proxychains_installed():
         print("WARNING: proxychains-ng is not installed. Falling back to direct connection.")
