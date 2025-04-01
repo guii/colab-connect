@@ -412,7 +412,7 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     clean_proxy_url = strip_protocol(proxy_url)
     
     print("Starting the tunnel")
-    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns, force_tls_tunnel)
+    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns)
 def test_github_dns_cli():
     """
     Command-line interface for testing GitHub DNS resolution.
