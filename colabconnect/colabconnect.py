@@ -96,7 +96,7 @@ def create_proxychains_config(proxy_url="proxy.company.com", proxy_port=8080,
             print("Using the hostname anyway, but it will likely fail.")
     
     # Determine whether to include proxy_dns based on parameter
-    dns_setting = "proxy_dns" if enable_proxy_dns else "# proxy_dns disabled"
+    dns_setting = "proxy_dns_old" if enable_proxy_dns else "# proxy_dns disabled"
     
     config_content = f"""# proxychains.conf for VSCode tunnel
 dynamic_chain
