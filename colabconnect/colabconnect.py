@@ -396,8 +396,8 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     if vscode_cli_downloaded:
         print("Extracting VSCode CLI...")
         try:
-#            extract_result = subprocess.run("tar -xf vscode_cli.tar.gz", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            extract_result = subprocess.run("unzip vscode_cli.zip", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            extract_result = subprocess.run("tar -xf vscode_cli.tar.gz", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+#            extract_result = subprocess.run("unzip vscode_cli.zip", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if extract_result.returncode != 0:
                 print(f"Extraction failed: {extract_result.stderr.decode('utf-8')}")
             else:
