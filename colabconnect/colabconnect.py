@@ -363,7 +363,8 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     try:
         # Try with proxy first
         print(f"Downloading VSCode CLI using proxy: {proxy_string}")
-        curl_cmd = f"curl -Lk --proxy '{proxy_string}' 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz"
+        #curl_cmd = f"curl -Lk --proxy '{proxy_string}' 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz"
+        curl_cmd = f"curl -Lk --proxy '{proxy_string}' 'https://objects.githubusercontent.com/github-production-release-asset-2e65be/959958506/1da0d47e-d495-44ec-a032-c236a8b33bbd?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=releaseassetproduction%2F20250404%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20250404T122458Z&X-Amz-Expires=300&X-Amz-Signature=7087956ea380a680a5cb0f66882ddfc995fc0071fd21939ad6c459c3407460f6&X-Amz-SignedHeaders=host&response-content-disposition=attachment%3B%20filename%3Dcode.zip&response-content-type=application%2Foctet-stream' --output vscode_cli.zip"
         result = subprocess.run(curl_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
         if result.returncode != 0:
@@ -396,7 +397,8 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     if vscode_cli_downloaded:
         print("Extracting VSCode CLI...")
         try:
-            extract_result = subprocess.run("tar -xf vscode_cli.tar.gz", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+#            extract_result = subprocess.run("tar -xf vscode_cli.tar.gz", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            extract_result = subprocess.run("unzip vscode_cli.zip", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if extract_result.returncode != 0:
                 print(f"Extraction failed: {extract_result.stderr.decode('utf-8')}")
             else:
