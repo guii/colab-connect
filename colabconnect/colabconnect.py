@@ -53,44 +53,19 @@ def check_proxytunnel_installed():
         os.chmod("./proxytunnel", 0o755)
         return True
     
-    print("Installing proxytunnel...")
-    # Use a different directory name to avoid conflicts
-    repo_dir = "proxytunnel_repo"
-    
-    # Remove existing directory if it exists
-    if Path(repo_dir).exists():
-        shutil.rmtree(repo_dir)
-    
-    # Clone the repository
-    subprocess.run(["git", "clone", "https://github.com/proxytunnel/proxytunnel.git", repo_dir], check=True)
-    
-    # Build proxytunnel
-    os.chdir(repo_dir)
-    subprocess.run(["make"], check=True)
-    
-    # Copy the binary to current directory with a unique name
+    print("Installing proxytunnel using apt...")
     try:
-        shutil.copy("proxytunnel", "../proxytunnel")
-        # Make it executable
-        os.chmod("../proxytunnel", 0o755)
+        # Install proxytunnel using apt
+        subprocess.run(["apt", "install", "-y", "proxytunnel"], check=True)
+        
+        if shutil.which("proxytunnel"):
+            print("proxytunnel installed successfully via apt")
+            return True
+        else:
+            print("Failed to install proxytunnel via apt")
+            return False
     except Exception as e:
-        print(f"Error copying proxytunnel binary: {str(e)}")
-        os.chdir("..")
-        return False
-    
-    os.chdir("..")
-    
-    # Clean up
-    try:
-        shutil.rmtree(repo_dir)
-    except Exception as e:
-        print(f"Warning: Could not remove temporary directory {repo_dir}: {str(e)}")
-    
-    if os.path.exists("./proxytunnel") and os.access("./proxytunnel", os.X_OK):
-        print("proxytunnel installed successfully")
-        return True
-    else:
-        print("Failed to install proxytunnel")
+        print(f"Error installing proxytunnel via apt: {str(e)}")
         return False
 
 
