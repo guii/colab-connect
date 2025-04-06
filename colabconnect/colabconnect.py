@@ -40,6 +40,32 @@ def check_proxychains_installed():
         return False
 
 
+def check_proxytunnel_installed():
+    """Check if proxytunnel is installed and install it if not."""
+    if shutil.which("proxytunnel"):
+        print("proxytunnel is already installed")
+        return True
+    
+    print("Installing proxytunnel...")
+    # Clone the repository if not already present
+    if not Path("proxytunnel").exists():
+        subprocess.run(["git", "clone", "https://github.com/proxytunnel/proxytunnel.git"], check=True)
+    
+    # Build and install proxytunnel
+    os.chdir("proxytunnel")
+    subprocess.run(["make"], check=True)
+    # Copy the binary to a location in PATH
+    subprocess.run(["cp", "proxytunnel", "../"], check=True)
+    os.chdir("..")
+    
+    if shutil.which("./proxytunnel"):
+        print("proxytunnel installed successfully")
+        return True
+    else:
+        print("Failed to install proxytunnel")
+        return False
+
+
 def strip_protocol(url):
     """Strip protocol prefix from URL."""
     if url.startswith("http://"):
@@ -117,6 +143,7 @@ http {proxy_ip} {proxy_port_to_use} connect
 
 
 
+def test_proxychains(proxy_url, proxy_port, enable_proxy_dns=True):
     """
     Test if proxychains-ng is working correctly with the given proxy.
     
@@ -182,6 +209,161 @@ http {proxy_ip} {proxy_port_to_use} connect
     # If we get here, all URLs and attempts failed
     print("All proxychains tests failed after multiple attempts with different URLs.")
     return False
+def start_tunnel_with_proxytunnel(proxy_url=None, proxy_port=None, proxy_user=None, proxy_pass=None,
+                                use_ntlm=False, use_ssl=False) -> None:
+    """
+    Start the VSCode tunnel using Proxytunnel.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy
+        proxy_user (str): Username for proxy authentication
+        proxy_pass (str): Password for proxy authentication
+        use_ntlm (bool): Whether to use NTLM authentication
+        use_ssl (bool): Whether to use SSL to connect to the proxy
+    """
+    use_proxytunnel = True
+    
+    # Check if proxytunnel is installed
+    if not check_proxytunnel_installed():
+        print("WARNING: proxytunnel could not be installed. Falling back to direct connection.")
+        use_proxytunnel = False
+    
+    # Prepare the command
+    base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
+    
+    if use_proxytunnel:
+        # Configure and start proxytunnel
+        if proxy_user and proxy_pass:
+            config = configure_proxytunnel_advanced(
+                proxy_url, proxy_port, proxy_user=proxy_user, proxy_pass=proxy_pass,
+                use_ntlm=use_ntlm, use_ssl=use_ssl
+            )
+        else:
+            config = configure_proxytunnel(proxy_url, proxy_port)
+            
+        proxytunnel_process = start_proxytunnel(config)
+        
+        if proxytunnel_process:
+            # Set environment variables for the VSCode tunnel to use the local proxy
+            env = os.environ.copy()
+            env["HTTPS_PROXY"] = f"http://localhost:{config['local_port']}"
+            
+            print(f"Starting VSCode tunnel with Proxytunnel using local port {config['local_port']}")
+            command = base_command
+        else:
+            print("Proxytunnel failed to start. Falling back to direct connection.")
+            use_proxytunnel = False
+            env = os.environ.copy()
+    else:
+        command = base_command
+        print("Starting VSCode tunnel directly (without Proxytunnel)")
+        env = os.environ.copy()
+    
+    # Start the process with both stdout and stderr captured
+    print(f"Executing command: {command}")
+    p = subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+        env=env
+    )
+    
+    # Use separate threads to read stdout and stderr to avoid blocking
+    from threading import Thread
+    
+    def read_output(pipe, prefix):
+        for line in iter(pipe.readline, ''):
+            print(f"{prefix}: {line.strip()}")
+            if "To grant access to the server" in line:
+                print(f"IMPORTANT: {line.strip()}")
+            if "Open this link" in line:
+                print("Tunnel is starting...")
+                time.sleep(5)
+                print(message)
+    
+    # Start threads to read output
+    Thread(target=read_output, args=(p.stdout, "STDOUT")).start()
+    Thread(target=read_output, args=(p.stderr, "STDERR")).start()
+    
+    # Wait for the process to complete
+    p.wait()
+    
+    # Clean up the proxytunnel process if it was started
+    if use_proxytunnel and proxytunnel_process:
+        proxytunnel_process.terminate()
+    
+    # Check the return code
+    if p.returncode != 0:
+        print(f"WARNING: VSCode tunnel process exited with code {p.returncode}")
+        
+        # If proxytunnel failed, try direct connection
+        if use_proxytunnel:
+            print("Attempting to start tunnel directly as fallback...")
+            start_tunnel_direct()
+    
+    return None
+
+
+def start_tunnel_with_fallbacks(proxy_url, proxy_port, proxy_user=None, proxy_pass=None,
+                              use_ntlm=False, use_ssl=False):
+    """
+    Start the VSCode tunnel with multiple fallback mechanisms.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy
+        proxy_user (str): Username for proxy authentication
+        proxy_pass (str): Password for proxy authentication
+        use_ntlm (bool): Whether to use NTLM authentication
+        use_ssl (bool): Whether to use SSL to connect to the proxy
+    """
+    # Try Proxytunnel first
+    if check_proxytunnel_installed():
+        # Try different target configurations
+        targets = [
+            {"host": "vscode.dev", "port": 443},
+            {"host": "global.rel.tunnels.api.visualstudio.com", "port": 443},
+            {"host": "online.visualstudio.com", "port": 443}
+        ]
+        
+        for target in targets:
+            print(f"Trying Proxytunnel with target {target['host']}:{target['port']}")
+            
+            if proxy_user and proxy_pass:
+                config = configure_proxytunnel_advanced(
+                    proxy_url, proxy_port, target["host"], target["port"],
+                    proxy_user=proxy_user, proxy_pass=proxy_pass,
+                    use_ntlm=use_ntlm, use_ssl=use_ssl
+                )
+            else:
+                config = configure_proxytunnel(proxy_url, proxy_port, target["host"], target["port"])
+                
+            # Test the connection first
+            if test_proxytunnel_connection(config):
+                print(f"Proxytunnel connection test successful with target {target['host']}:{target['port']}")
+                
+                # Start the tunnel with this configuration
+                start_tunnel_with_proxytunnel(
+                    proxy_url, proxy_port, proxy_user, proxy_pass, use_ntlm, use_ssl
+                )
+                return
+            else:
+                print(f"Proxytunnel connection test failed with target {target['host']}:{target['port']}")
+        
+        print("All Proxytunnel configurations failed")
+    
+    # Try proxychains-ng as fallback
+    print("Trying proxychains-ng as fallback")
+    if check_proxychains_installed():
+        start_tunnel(proxy_url, proxy_port, enable_proxy_dns=False)
+        return
+    
+    # Try direct connection as last resort
+    print("Trying direct connection as last resort")
+    start_tunnel_direct()
 
 
 def find_available_port():
@@ -193,7 +375,191 @@ def find_available_port():
     """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]   
+        return s.getsockname()[1]
+
+
+def start_proxytunnel(config):
+    """
+    Start the Proxytunnel process.
+    
+    Args:
+        config (dict): Configuration dictionary from configure_proxytunnel
+        
+    Returns:
+        subprocess.Popen: The running proxytunnel process
+    """
+    print(f"Starting Proxytunnel with command: {config['command']}")
+    
+    # Start the process
+    process = subprocess.Popen(
+        config['command'],
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True
+    )
+    
+    # Use separate threads to read stdout and stderr to avoid blocking
+    from threading import Thread
+    
+    def read_output(pipe, prefix):
+        for line in iter(pipe.readline, ''):
+            print(f"{prefix}: {line.strip()}")
+    
+    # Start threads to read output
+    Thread(target=read_output, args=(process.stdout, "PROXYTUNNEL")).start()
+    Thread(target=read_output, args=(process.stderr, "PROXYTUNNEL ERROR")).start()
+    
+    # Wait a moment for the tunnel to establish
+    time.sleep(2)
+    
+    # Check if the process is still running
+    if process.poll() is not None:
+        print(f"Proxytunnel process exited with code {process.returncode}")
+        return None
+    
+    print(f"Proxytunnel started successfully on local port {config['local_port']}")
+    return process
+
+
+def test_proxytunnel_connection(config):
+    """
+    Test if Proxytunnel is working correctly with the given configuration.
+    
+    Args:
+        config (dict): Configuration dictionary from configure_proxytunnel
+        
+    Returns:
+        bool: True if the test was successful, False otherwise
+    """
+    print("Testing Proxytunnel with a simple command...")
+    
+    # Start Proxytunnel
+    process = start_proxytunnel(config)
+    if not process:
+        return False
+    
+    # Try different test URLs
+    test_urls = [
+        "https://github.com",
+        "https://ifconfig.me",
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://checkip.amazonaws.com"
+    ]
+    
+    success = False
+    
+    # Set environment variable to use the local proxy
+    env = os.environ.copy()
+    env["HTTPS_PROXY"] = f"http://localhost:{config['local_port']}"
+    
+    # Try each URL
+    for test_url in test_urls:
+        print(f"Testing Proxytunnel with URL: {test_url}")
+        
+        # Try up to 3 times with each URL
+        for attempt in range(1, 4):
+            try:
+                print(f"Attempt {attempt} of 3...")
+                result = subprocess.run(
+                    f"curl -s {test_url}",
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                    env=env
+                )
+                
+                if result.returncode == 0:
+                    print(f"Proxytunnel test successful! Response: {result.stdout.decode('utf-8').strip()}")
+                    success = True
+                    break
+                else:
+                    print(f"Proxytunnel test failed with return code {result.returncode}")
+                    print(f"Error output: {result.stderr.decode('utf-8')}")
+            except Exception as e:
+                print(f"Proxytunnel test failed with exception: {str(e)}")
+        
+        if success:
+            break
+    
+    # Clean up
+    process.terminate()
+    
+    return success
+
+def configure_proxytunnel(proxy_url, proxy_port, target_host="vscode.dev", target_port=443):
+    """
+    Configure Proxytunnel settings.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy
+        target_host (str): The target host to connect to (default: vscode.dev)
+        target_port (int): The target port to connect to (default: 443)
+        
+    Returns:
+        dict: Configuration dictionary with command and local port
+    """
+    # Find an available local port
+    local_port = find_available_port()
+    
+    # Clean proxy URL
+    clean_proxy_url = strip_protocol(proxy_url)
+    
+    # Create the proxytunnel command
+    command = f"./proxytunnel -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
+    
+    return {
+        "command": command,
+        "local_port": local_port
+    }
+
+
+def configure_proxytunnel_advanced(proxy_url, proxy_port, target_host="vscode.dev",
+                                 target_port=443, proxy_user=None, proxy_pass=None,
+                                 use_ntlm=False, use_ssl=False):
+    """
+    Configure Proxytunnel with advanced settings.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy
+        target_host (str): The target host to connect to
+        target_port (int): The target port to connect to
+        proxy_user (str): Username for proxy authentication
+        proxy_pass (str): Password for proxy authentication
+        use_ntlm (bool): Whether to use NTLM authentication
+        use_ssl (bool): Whether to use SSL to connect to the proxy
+        
+    Returns:
+        dict: Configuration dictionary with command and local port
+    """
+    # Find an available local port
+    local_port = find_available_port()
+    
+    # Clean proxy URL
+    clean_proxy_url = strip_protocol(proxy_url)
+    
+    # Start building the command
+    command = f"./proxytunnel -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
+    
+    # Add authentication if provided
+    if proxy_user and proxy_pass:
+        if use_ntlm:
+            command += f" -N -u {proxy_user} -s {proxy_pass}"
+        else:
+            command += f" -P {proxy_user}:{proxy_pass}"
+    
+    # Add SSL if requested
+    if use_ssl:
+        command += " -E"
+    
+    return {
+        "command": command,
+        "local_port": local_port
+    }
 
 def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None:
     """
@@ -333,7 +699,9 @@ def verify_vscode_cli():
 
 
 def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
-                enable_proxy_dns=True) -> None:
+                enable_proxy_dns=True, use_proxytunnel=False,
+                proxy_user=None, proxy_pass=None, use_ntlm=False,
+                use_ssl=False, use_fallbacks=True) -> None:
     """
     Connect to VSCode tunnel through a corporate proxy.
     
@@ -341,6 +709,12 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
         proxy_url (str): The URL of the corporate proxy (default: proxy.company.com)
         proxy_port (int): The port of the corporate proxy (default: 8080)
         enable_proxy_dns (bool): Whether to enable proxy_dns in proxychains config (default: True)
+        use_proxytunnel (bool): Whether to use Proxytunnel instead of proxychains (default: False)
+        proxy_user (str): Username for proxy authentication (default: None)
+        proxy_pass (str): Password for proxy authentication (default: None)
+        use_ntlm (bool): Whether to use NTLM authentication (default: False)
+        use_ssl (bool): Whether to use SSL to connect to the proxy (default: False)
+        use_fallbacks (bool): Whether to try fallback mechanisms if the primary method fails (default: True)
     """
 
     print("Installing python libraries...")
@@ -414,7 +788,17 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     clean_proxy_url = strip_protocol(proxy_url)
     
     print("Starting the tunnel")
-    start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns)
+    if use_proxytunnel:
+        if use_fallbacks:
+            start_tunnel_with_fallbacks(
+                clean_proxy_url, proxy_port, proxy_user, proxy_pass, use_ntlm, use_ssl
+            )
+        else:
+            start_tunnel_with_proxytunnel(
+                clean_proxy_url, proxy_port, proxy_user, proxy_pass, use_ntlm, use_ssl
+            )
+    else:
+        start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns)
 def test_github_dns_cli():
     """
     Command-line interface for testing GitHub DNS resolution.

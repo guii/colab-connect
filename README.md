@@ -60,6 +60,47 @@ colabconnect(
 )
 ```
 
+### Using Proxytunnel for Restrictive Firewalls
+
+If you're behind a very restrictive corporate firewall that only allows web browsing traffic, you can use Proxytunnel instead of proxychains-ng:
+
+```python
+from colabconnect import colabconnect
+
+colabconnect(
+    proxy_url="proxy.company.com",
+    proxy_port=8080,
+    use_proxytunnel=True
+)
+```
+
+For advanced proxy configurations with authentication:
+
+```python
+from colabconnect import colabconnect
+
+colabconnect(
+    proxy_url="proxy.company.com",
+    proxy_port=8080,
+    use_proxytunnel=True,
+    proxy_user="username",
+    proxy_pass="password",
+    use_ntlm=True  # For NTLM authentication
+)
+```
+
+The Proxytunnel approach:
+1. Installs Proxytunnel if not already installed
+2. Creates a local tunnel from a dynamically assigned port to the target server through your HTTP proxy
+3. Sets the environment variables to use the local tunnel
+4. Starts the VSCode tunnel through the Proxytunnel connection
+
+This approach is particularly useful when:
+- Your corporate firewall blocks most protocols but allows HTTP/HTTPS traffic
+- You're experiencing connection issues with the standard proxychains-ng approach
+- Your proxy requires authentication
+- You need to connect through a proxy that only allows the HTTP CONNECT method
+
 ### TLS Proxy Tunneling
 
 If you're experiencing TLS handshake issues when connecting through a corporate proxy, you can use the TLS tunneling feature which creates a secure TLS connection to your proxy:
@@ -103,5 +144,3 @@ error:0A000126:SSL routines::unexpected eof while reading
 ```
 
 For a complete example, see the [tls_tunnel_example.py](tls_tunnel_example.py) file.
-
-
