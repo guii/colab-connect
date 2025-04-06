@@ -46,19 +46,47 @@ def check_proxytunnel_installed():
         print("proxytunnel is already installed")
         return True
     
-    print("Installing proxytunnel...")
-    # Clone the repository if not already present
-    if not Path("proxytunnel").exists():
-        subprocess.run(["git", "clone", "https://github.com/proxytunnel/proxytunnel.git"], check=True)
+    # Check if ./proxytunnel exists in current directory
+    if os.path.exists("./proxytunnel") and os.path.isfile("./proxytunnel"):
+        print("proxytunnel binary found in current directory")
+        # Make sure it's executable
+        os.chmod("./proxytunnel", 0o755)
+        return True
     
-    # Build and install proxytunnel
-    os.chdir("proxytunnel")
+    print("Installing proxytunnel...")
+    # Use a different directory name to avoid conflicts
+    repo_dir = "proxytunnel_repo"
+    
+    # Remove existing directory if it exists
+    if Path(repo_dir).exists():
+        shutil.rmtree(repo_dir)
+    
+    # Clone the repository
+    subprocess.run(["git", "clone", "https://github.com/proxytunnel/proxytunnel.git", repo_dir], check=True)
+    
+    # Build proxytunnel
+    os.chdir(repo_dir)
     subprocess.run(["make"], check=True)
-    # Copy the binary to a location in PATH
-    subprocess.run(["cp", "proxytunnel", "../"], check=True)
+    
+    # Copy the binary to current directory with a unique name
+    try:
+        shutil.copy("proxytunnel", "../proxytunnel")
+        # Make it executable
+        os.chmod("../proxytunnel", 0o755)
+    except Exception as e:
+        print(f"Error copying proxytunnel binary: {str(e)}")
+        os.chdir("..")
+        return False
+    
     os.chdir("..")
     
-    if shutil.which("./proxytunnel"):
+    # Clean up
+    try:
+        shutil.rmtree(repo_dir)
+    except Exception as e:
+        print(f"Warning: Could not remove temporary directory {repo_dir}: {str(e)}")
+    
+    if os.path.exists("./proxytunnel") and os.access("./proxytunnel", os.X_OK):
         print("proxytunnel installed successfully")
         return True
     else:
@@ -223,88 +251,126 @@ def start_tunnel_with_proxytunnel(proxy_url=None, proxy_port=None, proxy_user=No
         use_ssl (bool): Whether to use SSL to connect to the proxy
     """
     use_proxytunnel = True
+    proxytunnel_process = None
     
     # Check if proxytunnel is installed
     if not check_proxytunnel_installed():
         print("WARNING: proxytunnel could not be installed. Falling back to direct connection.")
         use_proxytunnel = False
     
+    # Verify VSCode CLI is available
+    if not os.path.exists("./code"):
+        print("ERROR: VSCode CLI not found at ./code. Make sure it's properly installed.")
+        if not verify_vscode_cli():
+            print("ERROR: Could not find or verify VSCode CLI. Cannot start tunnel.")
+            return None
+    
     # Prepare the command
     base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
     
-    if use_proxytunnel:
-        # Configure and start proxytunnel
-        if proxy_user and proxy_pass:
-            config = configure_proxytunnel_advanced(
-                proxy_url, proxy_port, proxy_user=proxy_user, proxy_pass=proxy_pass,
-                use_ntlm=use_ntlm, use_ssl=use_ssl
-            )
-        else:
-            config = configure_proxytunnel(proxy_url, proxy_port)
-            
-        proxytunnel_process = start_proxytunnel(config)
-        
-        if proxytunnel_process:
-            # Set environment variables for the VSCode tunnel to use the local proxy
-            env = os.environ.copy()
-            env["HTTPS_PROXY"] = f"http://localhost:{config['local_port']}"
-            
-            print(f"Starting VSCode tunnel with Proxytunnel using local port {config['local_port']}")
-            command = base_command
-        else:
-            print("Proxytunnel failed to start. Falling back to direct connection.")
-            use_proxytunnel = False
-            env = os.environ.copy()
-    else:
-        command = base_command
-        print("Starting VSCode tunnel directly (without Proxytunnel)")
-        env = os.environ.copy()
-    
-    # Start the process with both stdout and stderr captured
-    print(f"Executing command: {command}")
-    p = subprocess.Popen(
-        command,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-        env=env
-    )
-    
-    # Use separate threads to read stdout and stderr to avoid blocking
-    from threading import Thread
-    
-    def read_output(pipe, prefix):
-        for line in iter(pipe.readline, ''):
-            print(f"{prefix}: {line.strip()}")
-            if "To grant access to the server" in line:
-                print(f"IMPORTANT: {line.strip()}")
-            if "Open this link" in line:
-                print("Tunnel is starting...")
-                time.sleep(5)
-                print(message)
-    
-    # Start threads to read output
-    Thread(target=read_output, args=(p.stdout, "STDOUT")).start()
-    Thread(target=read_output, args=(p.stderr, "STDERR")).start()
-    
-    # Wait for the process to complete
-    p.wait()
-    
-    # Clean up the proxytunnel process if it was started
-    if use_proxytunnel and proxytunnel_process:
-        proxytunnel_process.terminate()
-    
-    # Check the return code
-    if p.returncode != 0:
-        print(f"WARNING: VSCode tunnel process exited with code {p.returncode}")
-        
-        # If proxytunnel failed, try direct connection
+    try:
         if use_proxytunnel:
-            print("Attempting to start tunnel directly as fallback...")
-            start_tunnel_direct()
-    
-    return None
+            # Configure and start proxytunnel
+            if proxy_user and proxy_pass:
+                print(f"Configuring Proxytunnel with authentication (user: {proxy_user}, NTLM: {use_ntlm}, SSL: {use_ssl})")
+                config = configure_proxytunnel_advanced(
+                    proxy_url, proxy_port, proxy_user=proxy_user, proxy_pass=proxy_pass,
+                    use_ntlm=use_ntlm, use_ssl=use_ssl
+                )
+            else:
+                print(f"Configuring Proxytunnel without authentication")
+                config = configure_proxytunnel(proxy_url, proxy_port)
+                
+            proxytunnel_process = start_proxytunnel(config)
+            
+            if proxytunnel_process:
+                # Set environment variables for the VSCode tunnel to use the local proxy
+                env = os.environ.copy()
+                env["HTTPS_PROXY"] = f"http://localhost:{config['local_port']}"
+                env["HTTP_PROXY"] = f"http://localhost:{config['local_port']}"
+                env["http_proxy"] = f"http://localhost:{config['local_port']}"
+                env["https_proxy"] = f"http://localhost:{config['local_port']}"
+                
+                print(f"Starting VSCode tunnel with Proxytunnel using local port {config['local_port']}")
+                command = base_command
+            else:
+                print("Proxytunnel failed to start. Falling back to direct connection.")
+                use_proxytunnel = False
+                env = os.environ.copy()
+        else:
+            command = base_command
+            print("Starting VSCode tunnel directly (without Proxytunnel)")
+            env = os.environ.copy()
+        
+        # Start the process with both stdout and stderr captured
+        print(f"Executing command: {command}")
+        p = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            env=env
+        )
+        
+        # Use separate threads to read stdout and stderr to avoid blocking
+        from threading import Thread
+        
+        def read_output(pipe, prefix):
+            try:
+                for line in iter(pipe.readline, ''):
+                    print(f"{prefix}: {line.strip()}")
+                    if "To grant access to the server" in line:
+                        print(f"IMPORTANT: {line.strip()}")
+                    if "Open this link" in line:
+                        print("Tunnel is starting...")
+                        time.sleep(5)
+                        print(message)
+                    # Look for specific error messages
+                    if "error" in line.lower() or "failed" in line.lower():
+                        print(f"TUNNEL ERROR: {line.strip()}")
+                    if "proxy" in line.lower() and ("error" in line.lower() or "failed" in line.lower()):
+                        print(f"PROXY ERROR: {line.strip()}")
+            except Exception as e:
+                print(f"Error reading from {prefix}: {str(e)}")
+        
+        # Start threads to read output
+        Thread(target=read_output, args=(p.stdout, "STDOUT")).start()
+        Thread(target=read_output, args=(p.stderr, "STDERR")).start()
+        
+        # Wait for the process to complete
+        p.wait()
+        
+        # Clean up the proxytunnel process if it was started
+        if use_proxytunnel and proxytunnel_process:
+            try:
+                proxytunnel_process.terminate()
+                print("Terminated Proxytunnel process")
+            except Exception as e:
+                print(f"Error terminating Proxytunnel process: {str(e)}")
+        
+        # Check the return code
+        if p.returncode != 0:
+            print(f"WARNING: VSCode tunnel process exited with code {p.returncode}")
+            
+            # If proxytunnel failed, try direct connection
+            if use_proxytunnel:
+                print("Attempting to start tunnel directly as fallback...")
+                start_tunnel_direct()
+        
+        return None
+    except Exception as e:
+        print(f"ERROR: Failed to start VSCode tunnel: {str(e)}")
+        
+        # Clean up the proxytunnel process if it was started
+        if use_proxytunnel and proxytunnel_process:
+            try:
+                proxytunnel_process.terminate()
+                print("Terminated Proxytunnel process")
+            except Exception as e2:
+                print(f"Error terminating Proxytunnel process: {str(e2)}")
+        
+        return None
 
 
 def start_tunnel_with_fallbacks(proxy_url, proxy_port, proxy_user=None, proxy_pass=None,
@@ -390,36 +456,61 @@ def start_proxytunnel(config):
     """
     print(f"Starting Proxytunnel with command: {config['command']}")
     
-    # Start the process
-    process = subprocess.Popen(
-        config['command'],
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        universal_newlines=True
-    )
-    
-    # Use separate threads to read stdout and stderr to avoid blocking
-    from threading import Thread
-    
-    def read_output(pipe, prefix):
-        for line in iter(pipe.readline, ''):
-            print(f"{prefix}: {line.strip()}")
-    
-    # Start threads to read output
-    Thread(target=read_output, args=(process.stdout, "PROXYTUNNEL")).start()
-    Thread(target=read_output, args=(process.stderr, "PROXYTUNNEL ERROR")).start()
-    
-    # Wait a moment for the tunnel to establish
-    time.sleep(2)
-    
-    # Check if the process is still running
-    if process.poll() is not None:
-        print(f"Proxytunnel process exited with code {process.returncode}")
+    # Verify that the proxytunnel binary exists and is executable
+    proxytunnel_path = config['command'].split()[0]
+    if not os.path.exists(proxytunnel_path):
+        print(f"ERROR: Proxytunnel binary not found at {proxytunnel_path}")
         return None
     
-    print(f"Proxytunnel started successfully on local port {config['local_port']}")
-    return process
+    if not os.access(proxytunnel_path, os.X_OK):
+        print(f"ERROR: Proxytunnel binary at {proxytunnel_path} is not executable")
+        try:
+            os.chmod(proxytunnel_path, 0o755)
+            print(f"Made {proxytunnel_path} executable")
+        except Exception as e:
+            print(f"Failed to make {proxytunnel_path} executable: {str(e)}")
+            return None
+    
+    try:
+        # Start the process
+        process = subprocess.Popen(
+            config['command'],
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True
+        )
+        
+        # Use separate threads to read stdout and stderr to avoid blocking
+        from threading import Thread
+        
+        def read_output(pipe, prefix):
+            try:
+                for line in iter(pipe.readline, ''):
+                    print(f"{prefix}: {line.strip()}")
+            except Exception as e:
+                print(f"Error reading from {prefix}: {str(e)}")
+        
+        # Start threads to read output
+        Thread(target=read_output, args=(process.stdout, "PROXYTUNNEL")).start()
+        Thread(target=read_output, args=(process.stderr, "PROXYTUNNEL ERROR")).start()
+        
+        # Wait a moment for the tunnel to establish
+        time.sleep(2)
+        
+        # Check if the process is still running
+        if process.poll() is not None:
+            print(f"Proxytunnel process exited with code {process.returncode}")
+            stderr_output = process.stderr.read()
+            if stderr_output:
+                print(f"Error output: {stderr_output}")
+            return None
+        
+        print(f"Proxytunnel started successfully on local port {config['local_port']}")
+        return process
+    except Exception as e:
+        print(f"Error starting Proxytunnel: {str(e)}")
+        return None
 
 
 def test_proxytunnel_connection(config):
@@ -463,7 +554,7 @@ def test_proxytunnel_connection(config):
             try:
                 print(f"Attempt {attempt} of 3...")
                 result = subprocess.run(
-                    f"curl -s {test_url}",
+                    f"curl -s --connect-timeout 10 {test_url}",
                     shell=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -472,20 +563,50 @@ def test_proxytunnel_connection(config):
                 )
                 
                 if result.returncode == 0:
-                    print(f"Proxytunnel test successful! Response: {result.stdout.decode('utf-8').strip()}")
-                    success = True
-                    break
+                    response = result.stdout.decode('utf-8').strip()
+                    print(f"Proxytunnel test successful! Response: {response}")
+                    if response:  # Make sure we got a non-empty response
+                        success = True
+                        break
+                    else:
+                        print("Warning: Received empty response, may indicate partial connection")
                 else:
                     print(f"Proxytunnel test failed with return code {result.returncode}")
-                    print(f"Error output: {result.stderr.decode('utf-8')}")
+                    error_output = result.stderr.decode('utf-8')
+                    print(f"Error output: {error_output}")
+                    
+                    # Check for specific error messages that might help diagnose the issue
+                    if "Could not resolve host" in error_output:
+                        print("DNS resolution failed. This might be a DNS configuration issue.")
+                    elif "Connection refused" in error_output:
+                        print("Connection refused. The proxy might be blocking the connection.")
+                    elif "timed out" in error_output:
+                        print("Connection timed out. The proxy might be slow or blocking the connection.")
+                    
+                    # Wait before retry
+                    if attempt < 3:
+                        print(f"Waiting 2 seconds before retry...")
+                        time.sleep(2)
+            except subprocess.TimeoutExpired:
+                print(f"Proxytunnel test timed out after 30 seconds on attempt {attempt}")
+                if attempt < 3:
+                    print(f"Waiting 2 seconds before retry...")
+                    time.sleep(2)
             except Exception as e:
                 print(f"Proxytunnel test failed with exception: {str(e)}")
+                if attempt < 3:
+                    print(f"Waiting 2 seconds before retry...")
+                    time.sleep(2)
         
         if success:
             break
     
     # Clean up
-    process.terminate()
+    try:
+        process.terminate()
+        print("Terminated Proxytunnel process")
+    except Exception as e:
+        print(f"Error terminating Proxytunnel process: {str(e)}")
     
     return success
 
@@ -508,8 +629,11 @@ def configure_proxytunnel(proxy_url, proxy_port, target_host="vscode.dev", targe
     # Clean proxy URL
     clean_proxy_url = strip_protocol(proxy_url)
     
+    # Determine the path to the proxytunnel binary
+    proxytunnel_path = shutil.which("proxytunnel") or "./proxytunnel"
+    
     # Create the proxytunnel command
-    command = f"./proxytunnel -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
+    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
     
     return {
         "command": command,
@@ -542,8 +666,11 @@ def configure_proxytunnel_advanced(proxy_url, proxy_port, target_host="vscode.de
     # Clean proxy URL
     clean_proxy_url = strip_protocol(proxy_url)
     
+    # Determine the path to the proxytunnel binary
+    proxytunnel_path = shutil.which("proxytunnel") or "./proxytunnel"
+    
     # Start building the command
-    command = f"./proxytunnel -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
+    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
     
     # Add authentication if provided
     if proxy_user and proxy_pass:
