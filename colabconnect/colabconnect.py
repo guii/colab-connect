@@ -1194,8 +1194,60 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
         os.environ["GIT_SSL_NO_VERIFY"] = "1"
         os.environ["npm_config_strict_ssl"] = "false"
         
-        # Run the VSCode tunnel command directly
-        command = "NODE_TLS_REJECT_UNAUTHORIZED=0 ./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
+        # Create a Node.js wrapper script to disable SSL verification
+        print("Creating Node.js wrapper script to disable SSL verification...")
+        wrapper_script = """
+const https = require('https');
+const { spawn } = require('child_process');
+const path = require('path');
+
+// Disable SSL certificate verification
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+// Override the https.Agent to disable certificate verification
+const originalAgent = https.Agent;
+https.Agent = function(...args) {
+  const agent = new originalAgent(...args);
+  agent.options.rejectUnauthorized = false;
+  return agent;
+};
+
+// Get the path to the VSCode CLI
+const vscodePath = path.resolve('./code');
+
+// Arguments for the VSCode CLI
+const args = [
+  'tunnel',
+  '--verbose',
+  '--accept-server-license-terms',
+  '--name', 'colab-connect',
+  '--log', 'debug'
+];
+
+console.log('Starting VSCode tunnel with SSL verification disabled...');
+console.log(`Command: ${vscodePath} ${args.join(' ')}`);
+
+// Spawn the VSCode CLI process
+const vscode = spawn(vscodePath, args, {
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    NODE_TLS_REJECT_UNAUTHORIZED: '0'
+  }
+});
+
+// Forward the exit code
+vscode.on('exit', (code) => {
+  process.exit(code);
+});
+"""
+        
+        # Write the wrapper script to a file
+        with open("vscode_wrapper.js", "w") as f:
+            f.write(wrapper_script)
+        
+        # Run the wrapper script with Node.js
+        command = "node vscode_wrapper.js"
         print(f"Executing command: {command}")
         
         # Create environment with SSL verification disabled
