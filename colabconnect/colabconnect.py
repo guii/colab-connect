@@ -681,7 +681,12 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None
         use_proxychains = False
     
     # Prepare the command
+    # Add --accept-server-license-terms to the command
     base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
+    
+    # If SSL verification is disabled, add the NODE_TLS_REJECT_UNAUTHORIZED=0 environment variable
+    if 'NODE_TLS_REJECT_UNAUTHORIZED' in os.environ and os.environ['NODE_TLS_REJECT_UNAUTHORIZED'] == '0':
+        base_command = "NODE_TLS_REJECT_UNAUTHORIZED=0 " + base_command
     
     if use_proxychains:
         config_path = create_proxychains_config(
@@ -739,7 +744,12 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None
 
 def start_tunnel_direct():
     """Start the VSCode tunnel directly without proxychains-ng."""
+    # Add --accept-server-license-terms to the command
     command = "./code tunnel --accept-server-license-terms --verbose --name colab-connect --log debug"
+    
+    # If SSL verification is disabled, add the NODE_TLS_REJECT_UNAUTHORIZED=0 environment variable
+    if 'NODE_TLS_REJECT_UNAUTHORIZED' in os.environ and os.environ['NODE_TLS_REJECT_UNAUTHORIZED'] == '0':
+        command = "NODE_TLS_REJECT_UNAUTHORIZED=0 " + command
     print(f"Starting VSCode tunnel directly: {command}")
     
     p = subprocess.Popen(
@@ -805,7 +815,8 @@ def verify_vscode_cli():
 def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
                 enable_proxy_dns=True, use_proxytunnel=False,
                 proxy_user=None, proxy_pass=None, use_ntlm=False,
-                use_ssl=False, use_fallbacks=True) -> None:
+                use_ssl=False, use_fallbacks=True, ca_cert_path=None,
+                disable_ssl_verification=False) -> None:
     """
     Connect to VSCode tunnel through a corporate proxy.
     
@@ -819,8 +830,26 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
         use_ntlm (bool): Whether to use NTLM authentication (default: False)
         use_ssl (bool): Whether to use SSL to connect to the proxy (default: False)
         use_fallbacks (bool): Whether to try fallback mechanisms if the primary method fails (default: True)
+        ca_cert_path (str): Path to a custom CA certificate file (default: None)
+        disable_ssl_verification (bool): Whether to disable SSL verification entirely (default: False)
     """
 
+    # Set environment variables for custom CA certificate if provided
+    if ca_cert_path:
+        if os.path.exists(ca_cert_path):
+            print(f"Using custom CA certificate: {ca_cert_path}")
+            os.environ["NODE_EXTRA_CA_CERTS"] = ca_cert_path
+            os.environ["SSL_CERT_FILE"] = ca_cert_path
+            os.environ["REQUESTS_CA_BUNDLE"] = ca_cert_path
+            os.environ["CURL_CA_BUNDLE"] = ca_cert_path
+        else:
+            print(f"Warning: Custom CA certificate file not found: {ca_cert_path}")
+    
+    # Disable SSL verification if requested (not recommended for production)
+    if disable_ssl_verification:
+        print("Warning: SSL verification is disabled. This is not secure for production use.")
+        os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+    
     print("Installing python libraries...")
     run("pip3 install --user flake8 black ipywidgets twine")
     run("pip3 install -U ipykernel")
@@ -902,7 +931,10 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
                 clean_proxy_url, proxy_port, proxy_user, proxy_pass, use_ntlm, use_ssl
             )
     else:
+        # Pass the environment variables that were set earlier
         start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns)
+
+
 def test_github_dns_cli():
     """
     Command-line interface for testing GitHub DNS resolution.
