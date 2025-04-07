@@ -636,9 +636,8 @@ def configure_proxytunnel(proxy_url, proxy_port, target_host="vscode.dev", targe
     proxytunnel_path = shutil.which("proxytunnel") or "./proxytunnel"
     
     # Create the proxytunnel command
-    # Add -n option to disable SSL certificate verification
     # Add -v for verbose output to help with debugging
-    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port} -n -v"
+    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port} -v"
     
     return {
         "command": command,
@@ -675,9 +674,8 @@ def configure_proxytunnel_advanced(proxy_url, proxy_port, target_host="vscode.de
     proxytunnel_path = shutil.which("proxytunnel") or "./proxytunnel"
     
     # Start building the command
-    # Add -n option to disable SSL certificate verification
     # Add -v for verbose output to help with debugging
-    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port} -n -v"
+    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port} -v"
     
     
     # Add authentication if provided
