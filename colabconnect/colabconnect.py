@@ -122,87 +122,97 @@ class ProxyHTTPRequestHandler(BaseHTTPRequestHandler):
         host, port = self.path.split(':')
         port = int(port)
         
-        # Connect to the proxy
-        proxy_conn = http.client.HTTPConnection(self.proxy_url, self.proxy_port)
+        print(f"CONNECT request for {host}:{port}")
         
-        # Send CONNECT request to the proxy
-        proxy_conn.request('CONNECT', f"{host}:{port}", headers={
-            'Host': f"{host}:{port}",
-            'Proxy-Connection': 'keep-alive'
-        })
-        
-        # Get the response from the proxy
-        proxy_response = proxy_conn.getresponse()
-        
-        # If the proxy accepted the CONNECT request
-        if proxy_response.status == 200:
+        try:
+            # Create a direct connection to the target
+            target_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            target_socket.settimeout(10)
+            
+            # Connect directly to the target (bypassing the proxy)
+            print(f"Connecting directly to {host}:{port}")
+            target_socket.connect((host, port))
+            
             # Send a 200 response to the client
             self.send_response(200, 'Connection Established')
             self.send_header('Proxy-Agent', 'VSCode-Tunnel-Helper')
             self.end_headers()
             
-            # Get the socket from the proxy connection
-            proxy_socket = proxy_conn.sock
-            
             # Get the client socket
             client_socket = self.connection
             
-            # Forward data between the client and the proxy
-            self._forward_data(client_socket, proxy_socket)
-        else:
-            # If the proxy rejected the CONNECT request, forward the response to the client
-            self.send_response(proxy_response.status, proxy_response.reason)
-            for header, value in proxy_response.getheaders():
-                self.send_header(header, value)
-            self.end_headers()
-            self.wfile.write(proxy_response.read())
+            # Forward data between the client and the target
+            self._forward_data(client_socket, target_socket)
+        except Exception as e:
+            print(f"Error in CONNECT: {str(e)}")
+            self.send_error(502, f"Bad Gateway: {str(e)}")
     
-    def _forward_data(self, client_socket, proxy_socket):
-        """Forward data between the client and the proxy."""
-        # Set sockets to non-blocking mode
-        client_socket.setblocking(0)
-        proxy_socket.setblocking(0)
-        
-        # Create buffers for data
-        client_buffer = b''
-        proxy_buffer = b''
-        
-        # Set timeout
-        timeout = 1
-        
-        # Forward data until one of the sockets is closed
-        while True:
-            # Wait for data from either socket
-            inputs = [client_socket, proxy_socket]
-            readable, _, exceptional = select.select(inputs, [], inputs, timeout)
+    def _forward_data(self, client_socket, target_socket):
+        """Forward data between the client and the target."""
+        if not client_socket or not target_socket:
+            print("Error: Invalid sockets for forwarding")
+            return
             
-            # If there was an error with a socket, close both
-            if exceptional:
-                break
+        try:
+            # Set sockets to non-blocking mode
+            client_socket.setblocking(0)
+            target_socket.setblocking(0)
             
-            # Read from client socket
-            if client_socket in readable:
+            # Set timeout
+            timeout = 1
+            
+            # Forward data until one of the sockets is closed
+            while True:
+                # Wait for data from either socket
+                inputs = [client_socket, target_socket]
                 try:
-                    data = client_socket.recv(4096)
-                    if not data:
-                        break
-                    proxy_socket.sendall(data)
-                except:
+                    readable, _, exceptional = select.select(inputs, [], inputs, timeout)
+                except select.error as e:
+                    print(f"Select error: {str(e)}")
                     break
-            
-            # Read from proxy socket
-            if proxy_socket in readable:
-                try:
-                    data = proxy_socket.recv(4096)
-                    if not data:
-                        break
-                    client_socket.sendall(data)
-                except:
+                
+                # If there was an error with a socket, close both
+                if exceptional:
+                    print("Socket exception")
                     break
+                
+                # Read from client socket
+                if client_socket in readable:
+                    try:
+                        data = client_socket.recv(4096)
+                        if not data:
+                            print("Client closed connection")
+                            break
+                        target_socket.sendall(data)
+                    except Exception as e:
+                        print(f"Error reading from client: {str(e)}")
+                        break
+                
+                # Read from target socket
+                if target_socket in readable:
+                    try:
+                        data = target_socket.recv(4096)
+                        if not data:
+                            print("Target closed connection")
+                            break
+                        client_socket.sendall(data)
+                    except Exception as e:
+                        print(f"Error reading from target: {str(e)}")
+                        break
+        except Exception as e:
+            print(f"Error in data forwarding: {str(e)}")
+        finally:
+            # Close both sockets
+            print("Closing connections")
+            try:
+                client_socket.close()
+            except:
+                pass
+            try:
+                target_socket.close()
+            except:
+                pass
         
-        # Close both sockets
-        client_socket.close()
-        proxy_socket.close()
     
     def do_GET(self):
         """Handle GET requests."""
@@ -1167,19 +1177,22 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     
     print("Starting the tunnel")
     
-    # Start a local proxy server that doesn't verify SSL certificates
-    print("Starting local SSL-unverifying proxy server...")
-    local_server, local_port = start_proxy_server(clean_proxy_url, proxy_port)
+    # Use direct connection with SSL verification disabled
+    print("Using direct connection with SSL verification disabled...")
     
     try:
-        # Set environment variables to use our local proxy
-        os.environ["HTTPS_PROXY"] = f"http://localhost:{local_port}"
-        os.environ["HTTP_PROXY"] = f"http://localhost:{local_port}"
-        os.environ["http_proxy"] = f"http://localhost:{local_port}"
-        os.environ["https_proxy"] = f"http://localhost:{local_port}"
+        # Set environment variables for the proxy
+        os.environ["HTTPS_PROXY"] = f"http://{clean_proxy_url}:{proxy_port}"
+        os.environ["HTTP_PROXY"] = f"http://{clean_proxy_url}:{proxy_port}"
+        os.environ["http_proxy"] = f"http://{clean_proxy_url}:{proxy_port}"
+        os.environ["https_proxy"] = f"http://{clean_proxy_url}:{proxy_port}"
         
-        # Disable SSL verification
+        # Disable SSL verification with multiple environment variables
         os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        os.environ["CURL_CA_BUNDLE"] = ""
+        os.environ["SSL_CERT_FILE"] = ""
+        os.environ["GIT_SSL_NO_VERIFY"] = "1"
+        os.environ["npm_config_strict_ssl"] = "false"
         
         # Run the VSCode tunnel command directly
         command = "NODE_TLS_REJECT_UNAUTHORIZED=0 ./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
@@ -1222,12 +1235,7 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
         if p.returncode != 0:
             print(f"WARNING: VSCode tunnel process exited with code {p.returncode}")
     finally:
-        # Shut down the local proxy server
-        try:
-            local_server.shutdown()
-            print("Local proxy server shut down")
-        except:
-            pass
+        pass
 
 
 def test_github_dns_cli():
