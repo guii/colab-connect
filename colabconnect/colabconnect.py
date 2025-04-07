@@ -6,6 +6,13 @@ import sys
 import os
 import shutil
 import socket
+import tempfile
+import ssl
+import threading
+import select
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import http.client
+import urllib.parse
 
 
 message = """
@@ -91,6 +98,203 @@ def resolve_hostname(hostname):
     except socket.gaierror as e:
         print(f"Failed to resolve hostname {hostname}: {str(e)}")
         return None
+
+
+def create_ssl_unverified_context():
+    """Create an SSL context that doesn't verify certificates."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+class ProxyHTTPRequestHandler(BaseHTTPRequestHandler):
+    """HTTP request handler that forwards requests to a target server through a proxy."""
+    
+    def __init__(self, *args, proxy_url=None, proxy_port=None, **kwargs):
+        self.proxy_url = proxy_url
+        self.proxy_port = proxy_port
+        super().__init__(*args, **kwargs)
+    
+    def do_CONNECT(self):
+        """Handle CONNECT requests (for HTTPS connections)."""
+        # Parse the target address from the request
+        host, port = self.path.split(':')
+        port = int(port)
+        
+        # Connect to the proxy
+        proxy_conn = http.client.HTTPConnection(self.proxy_url, self.proxy_port)
+        
+        # Send CONNECT request to the proxy
+        proxy_conn.request('CONNECT', f"{host}:{port}", headers={
+            'Host': f"{host}:{port}",
+            'Proxy-Connection': 'keep-alive'
+        })
+        
+        # Get the response from the proxy
+        proxy_response = proxy_conn.getresponse()
+        
+        # If the proxy accepted the CONNECT request
+        if proxy_response.status == 200:
+            # Send a 200 response to the client
+            self.send_response(200, 'Connection Established')
+            self.send_header('Proxy-Agent', 'VSCode-Tunnel-Helper')
+            self.end_headers()
+            
+            # Get the socket from the proxy connection
+            proxy_socket = proxy_conn.sock
+            
+            # Get the client socket
+            client_socket = self.connection
+            
+            # Forward data between the client and the proxy
+            self._forward_data(client_socket, proxy_socket)
+        else:
+            # If the proxy rejected the CONNECT request, forward the response to the client
+            self.send_response(proxy_response.status, proxy_response.reason)
+            for header, value in proxy_response.getheaders():
+                self.send_header(header, value)
+            self.end_headers()
+            self.wfile.write(proxy_response.read())
+    
+    def _forward_data(self, client_socket, proxy_socket):
+        """Forward data between the client and the proxy."""
+        # Set sockets to non-blocking mode
+        client_socket.setblocking(0)
+        proxy_socket.setblocking(0)
+        
+        # Create buffers for data
+        client_buffer = b''
+        proxy_buffer = b''
+        
+        # Set timeout
+        timeout = 1
+        
+        # Forward data until one of the sockets is closed
+        while True:
+            # Wait for data from either socket
+            inputs = [client_socket, proxy_socket]
+            readable, _, exceptional = select.select(inputs, [], inputs, timeout)
+            
+            # If there was an error with a socket, close both
+            if exceptional:
+                break
+            
+            # Read from client socket
+            if client_socket in readable:
+                try:
+                    data = client_socket.recv(4096)
+                    if not data:
+                        break
+                    proxy_socket.sendall(data)
+                except:
+                    break
+            
+            # Read from proxy socket
+            if proxy_socket in readable:
+                try:
+                    data = proxy_socket.recv(4096)
+                    if not data:
+                        break
+                    client_socket.sendall(data)
+                except:
+                    break
+        
+        # Close both sockets
+        client_socket.close()
+        proxy_socket.close()
+    
+    def do_GET(self):
+        """Handle GET requests."""
+        self._handle_request('GET')
+    
+    def do_POST(self):
+        """Handle POST requests."""
+        self._handle_request('POST')
+    
+    def do_PUT(self):
+        """Handle PUT requests."""
+        self._handle_request('PUT')
+    
+    def do_DELETE(self):
+        """Handle DELETE requests."""
+        self._handle_request('DELETE')
+    
+    def do_HEAD(self):
+        """Handle HEAD requests."""
+        self._handle_request('HEAD')
+    
+    def do_OPTIONS(self):
+        """Handle OPTIONS requests."""
+        self._handle_request('OPTIONS')
+    
+    def do_PATCH(self):
+        """Handle PATCH requests."""
+        self._handle_request('PATCH')
+    
+    def _handle_request(self, method):
+        """Handle HTTP requests by forwarding them to the target through the proxy."""
+        # Parse the URL
+        url = urllib.parse.urlparse(self.path)
+        
+        # Read the request body
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length) if content_length > 0 else None
+        
+        # Create a connection to the proxy
+        proxy_conn = http.client.HTTPConnection(self.proxy_url, self.proxy_port)
+        
+        # Prepare headers for the proxy
+        headers = dict(self.headers)
+        
+        # Send the request to the proxy
+        proxy_conn.request(method, self.path, body=body, headers=headers)
+        
+        # Get the response from the proxy
+        proxy_response = proxy_conn.getresponse()
+        
+        # Forward the response to the client
+        self.send_response(proxy_response.status, proxy_response.reason)
+        for header, value in proxy_response.getheaders():
+            self.send_header(header, value)
+        self.end_headers()
+        
+        # Forward the response body
+        self.wfile.write(proxy_response.read())
+        
+        # Close the proxy connection
+        proxy_conn.close()
+
+
+def start_proxy_server(proxy_url, proxy_port, bind_port=0):
+    """
+    Start a local proxy server that forwards requests to the corporate proxy.
+    
+    Args:
+        proxy_url (str): The URL of the corporate proxy
+        proxy_port (int): The port of the corporate proxy
+        bind_port (int): The port to bind the local proxy server to (0 for auto-assign)
+        
+    Returns:
+        tuple: (server, port) - The server object and the port it's listening on
+    """
+    # Create a request handler class with the proxy information
+    handler = lambda *args, **kwargs: ProxyHTTPRequestHandler(*args, proxy_url=proxy_url, proxy_port=proxy_port, **kwargs)
+    
+    # Create the server
+    server = HTTPServer(('127.0.0.1', bind_port), handler)
+    
+    # Get the port the server is listening on
+    port = server.server_port
+    
+    # Start the server in a separate thread
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
+    
+    print(f"Started local proxy server on port {port}")
+    
+    return server, port
 
 
 def create_proxychains_config(proxy_url="proxy.company.com", proxy_port=8080,
@@ -962,18 +1166,68 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     clean_proxy_url = strip_protocol(proxy_url)
     
     print("Starting the tunnel")
-    if use_proxytunnel:
-        if use_fallbacks:
-            start_tunnel_with_fallbacks(
-                clean_proxy_url, proxy_port, proxy_user, proxy_pass, use_ntlm, use_ssl
-            )
-        else:
-            start_tunnel_with_proxytunnel(
-                clean_proxy_url, proxy_port, proxy_user, proxy_pass, use_ntlm, use_ssl
-            )
-    else:
-        # Pass the environment variables that were set earlier
-        start_tunnel(clean_proxy_url, proxy_port, enable_proxy_dns)
+    
+    # Start a local proxy server that doesn't verify SSL certificates
+    print("Starting local SSL-unverifying proxy server...")
+    local_server, local_port = start_proxy_server(clean_proxy_url, proxy_port)
+    
+    try:
+        # Set environment variables to use our local proxy
+        os.environ["HTTPS_PROXY"] = f"http://localhost:{local_port}"
+        os.environ["HTTP_PROXY"] = f"http://localhost:{local_port}"
+        os.environ["http_proxy"] = f"http://localhost:{local_port}"
+        os.environ["https_proxy"] = f"http://localhost:{local_port}"
+        
+        # Disable SSL verification
+        os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        
+        # Run the VSCode tunnel command directly
+        command = "NODE_TLS_REJECT_UNAUTHORIZED=0 ./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
+        print(f"Executing command: {command}")
+        
+        # Create environment with SSL verification disabled
+        env = os.environ.copy()
+        
+        # Start the process
+        p = subprocess.Popen(
+            command,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+            env=env
+        )
+        
+        # Use separate threads to read stdout and stderr
+        from threading import Thread
+        
+        def read_output(pipe, prefix):
+            for line in iter(pipe.readline, ''):
+                print(f"{prefix}: {line.strip()}")
+                if "To grant access to the server" in line:
+                    print(f"IMPORTANT: {line.strip()}")
+                if "Open this link" in line:
+                    print("Tunnel is starting...")
+                    time.sleep(5)
+                    print(message)
+        
+        # Start threads to read output
+        Thread(target=read_output, args=(p.stdout, "STDOUT")).start()
+        Thread(target=read_output, args=(p.stderr, "STDERR")).start()
+        
+        # Wait for the process to complete
+        p.wait()
+        
+        # Check the return code
+        if p.returncode != 0:
+            print(f"WARNING: VSCode tunnel process exited with code {p.returncode}")
+    finally:
+        # Shut down the local proxy server
+        try:
+            local_server.shutdown()
+            print("Local proxy server shut down")
+        except:
+            pass
 
 
 def test_github_dns_cli():
