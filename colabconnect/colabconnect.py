@@ -1177,8 +1177,118 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     
     print("Starting the tunnel")
     
-    # Use direct connection with SSL verification disabled
-    print("Using direct connection with SSL verification disabled...")
+    # Try to extract the ZScaler root CA certificate
+    print("Attempting to extract ZScaler root CA certificate...")
+    
+    # Create a script to extract the certificate
+    extract_script = """
+import socket
+import ssl
+import subprocess
+import sys
+import os
+import tempfile
+
+def extract_certificate_chain(host, port, proxy_host, proxy_port):
+    # Extract the certificate chain from a server through a proxy
+    print(f"Connecting to {host}:{port} through proxy {proxy_host}:{proxy_port}")
+    
+    # Create a temporary file to store the certificate
+    cert_file = tempfile.mktemp(suffix='.pem')
+    
+    # Use openssl to connect to the server through the proxy and extract the certificate chain
+    cmd = [
+        'openssl', 's_client',
+        '-connect', f'{host}:{port}',
+        '-proxy', f'{proxy_host}:{proxy_port}',
+        '-showcerts'
+    ]
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            print(f"Error running openssl: {result.stderr}")
+            return None
+        
+        output = result.stdout
+        
+        # Extract all certificates from the output
+        certs = []
+        current_cert = []
+        in_cert = False
+        
+        for line in output.splitlines():
+            if line == "-----BEGIN CERTIFICATE-----":
+                in_cert = True
+                current_cert = [line]
+            elif line == "-----END CERTIFICATE-----" and in_cert:
+                current_cert.append(line)
+                certs.append("\\n".join(current_cert))
+                in_cert = False
+            elif in_cert:
+                current_cert.append(line)
+        
+        if not certs:
+            print("No certificates found in the output")
+            return None
+        
+        # The root CA certificate is usually the last one in the chain
+        root_ca_cert = certs[-1]
+        
+        # Save the root CA certificate to a file
+        with open(cert_file, 'w') as f:
+            f.write(root_ca_cert.replace("\\n", "\\n"))
+        
+        print(f"Extracted root CA certificate and saved to {cert_file}")
+        return cert_file
+    except Exception as e:
+        print(f"Error extracting certificate: {str(e)}")
+        return None
+
+# Extract the certificate chain from the Visual Studio API server
+cert_file = extract_certificate_chain(
+    'global.rel.tunnels.api.visualstudio.com',
+    443,
+    sys.argv[1],
+    int(sys.argv[2])
+)
+
+# Print the path to the certificate file
+if cert_file:
+    print(f"CERT_FILE:{cert_file}")
+else:
+    print("CERT_FILE:NONE")
+"""
+    
+    # Write the script to a file
+    with open("extract_cert.py", "w") as f:
+        f.write(extract_script)
+    
+    # Run the script to extract the certificate
+    print(f"Running certificate extraction script...")
+    extract_cmd = f"python extract_cert.py {clean_proxy_url} {proxy_port}"
+    extract_result = subprocess.run(extract_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+    # Parse the output to get the certificate file path
+    cert_file = None
+    for line in extract_result.stdout.splitlines():
+        if line.startswith("CERT_FILE:"):
+            cert_file = line[len("CERT_FILE:"):]
+            if cert_file == "NONE":
+                cert_file = None
+            break
+    
+    if cert_file:
+        print(f"Successfully extracted ZScaler root CA certificate to {cert_file}")
+    else:
+        print("Failed to extract ZScaler root CA certificate")
+        print("Falling back to direct connection with SSL verification disabled...")
     
     try:
         # Set environment variables for the proxy
@@ -1187,71 +1297,66 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
         os.environ["http_proxy"] = f"http://{clean_proxy_url}:{proxy_port}"
         os.environ["https_proxy"] = f"http://{clean_proxy_url}:{proxy_port}"
         
-        # Disable SSL verification with multiple environment variables
-        os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
-        os.environ["CURL_CA_BUNDLE"] = ""
-        os.environ["SSL_CERT_FILE"] = ""
-        os.environ["GIT_SSL_NO_VERIFY"] = "1"
-        os.environ["npm_config_strict_ssl"] = "false"
+        # Set SSL verification environment variables
+        if cert_file:
+            # Use the extracted certificate
+            print(f"Using extracted ZScaler root CA certificate: {cert_file}")
+            os.environ["NODE_EXTRA_CA_CERTS"] = cert_file
+            os.environ["SSL_CERT_FILE"] = cert_file
+            os.environ["REQUESTS_CA_BUNDLE"] = cert_file
+            os.environ["CURL_CA_BUNDLE"] = cert_file
+        else:
+            # Disable SSL verification
+            print("Disabling SSL verification (not recommended for production)")
+            os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+            os.environ["CURL_CA_BUNDLE"] = ""
+            os.environ["SSL_CERT_FILE"] = ""
+            os.environ["GIT_SSL_NO_VERIFY"] = "1"
+            os.environ["npm_config_strict_ssl"] = "false"
         
-        # Create a Node.js wrapper script to disable SSL verification
-        print("Creating Node.js wrapper script to disable SSL verification...")
-        wrapper_script = """
-const https = require('https');
-const { spawn } = require('child_process');
-const path = require('path');
-
-// Disable SSL certificate verification
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
-// Override the https.Agent to disable certificate verification
-const originalAgent = https.Agent;
-https.Agent = function(...args) {
-  const agent = new originalAgent(...args);
-  agent.options.rejectUnauthorized = false;
-  return agent;
-};
-
-// Get the path to the VSCode CLI
-const vscodePath = path.resolve('./code');
-
-// Arguments for the VSCode CLI
-const args = [
-  'tunnel',
-  '--verbose',
-  '--accept-server-license-terms',
-  '--name', 'colab-connect',
-  '--log', 'debug'
-];
-
-console.log('Starting VSCode tunnel with SSL verification disabled...');
-console.log(`Command: ${vscodePath} ${args.join(' ')}`);
-
-// Spawn the VSCode CLI process
-const vscode = spawn(vscodePath, args, {
-  stdio: 'inherit',
-  env: {
-    ...process.env,
-    NODE_TLS_REJECT_UNAUTHORIZED: '0'
-  }
-});
-
-// Forward the exit code
-vscode.on('exit', (code) => {
-  process.exit(code);
-});
+        # Create a simple shell script to run the VSCode CLI with the right environment
+        print("Creating shell script to run VSCode CLI...")
+        shell_script = f"""#!/bin/bash
+# Set environment variables
+export HTTPS_PROXY="http://{clean_proxy_url}:{proxy_port}"
+export HTTP_PROXY="http://{clean_proxy_url}:{proxy_port}"
+export http_proxy="http://{clean_proxy_url}:{proxy_port}"
+export https_proxy="http://{clean_proxy_url}:{proxy_port}"
 """
         
-        # Write the wrapper script to a file
-        with open("vscode_wrapper.js", "w") as f:
-            f.write(wrapper_script)
+        if cert_file:
+            shell_script += f"""
+# Use the extracted certificate
+export NODE_EXTRA_CA_CERTS="{cert_file}"
+export SSL_CERT_FILE="{cert_file}"
+export REQUESTS_CA_BUNDLE="{cert_file}"
+export CURL_CA_BUNDLE="{cert_file}"
+"""
+        else:
+            shell_script += """
+# Disable SSL verification
+export NODE_TLS_REJECT_UNAUTHORIZED="0"
+export CURL_CA_BUNDLE=""
+export SSL_CERT_FILE=""
+export GIT_SSL_NO_VERIFY="1"
+export npm_config_strict_ssl="false"
+"""
         
-        # Run the wrapper script with Node.js
-        command = "node vscode_wrapper.js"
+        shell_script += """
+# Run the VSCode CLI
+./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug
+"""
+        
+        # Write the shell script to a file
+        with open("run_vscode.sh", "w") as f:
+            f.write(shell_script)
+        
+        # Make the shell script executable
+        os.chmod("run_vscode.sh", 0o755)
+        
+        # Run the shell script
+        command = "./run_vscode.sh"
         print(f"Executing command: {command}")
-        
-        # Create environment with SSL verification disabled
-        env = os.environ.copy()
         
         # Start the process
         p = subprocess.Popen(
@@ -1259,8 +1364,7 @@ vscode.on('exit', (code) => {
             shell=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            universal_newlines=True,
-            env=env
+            universal_newlines=True
         )
         
         # Use separate threads to read stdout and stderr
@@ -1287,7 +1391,13 @@ vscode.on('exit', (code) => {
         if p.returncode != 0:
             print(f"WARNING: VSCode tunnel process exited with code {p.returncode}")
     finally:
-        pass
+        # Clean up temporary files
+        if cert_file and os.path.exists(cert_file):
+            try:
+                os.remove(cert_file)
+                print(f"Removed temporary certificate file: {cert_file}")
+            except:
+                pass
 
 
 def test_github_dns_cli():
