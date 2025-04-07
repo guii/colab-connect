@@ -241,7 +241,7 @@ def start_tunnel_with_proxytunnel(proxy_url=None, proxy_port=None, proxy_user=No
             return None
     
     # Prepare the command
-    base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
+    base_command = "NODE_TLS_REJECT_UNAUTHORIZED=0 ./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
     
     try:
         if use_proxytunnel:
@@ -265,6 +265,13 @@ def start_tunnel_with_proxytunnel(proxy_url=None, proxy_port=None, proxy_user=No
                 env["HTTP_PROXY"] = f"http://localhost:{config['local_port']}"
                 env["http_proxy"] = f"http://localhost:{config['local_port']}"
                 env["https_proxy"] = f"http://localhost:{config['local_port']}"
+                # Disable SSL verification for all processes
+                env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+                env["CURL_CA_BUNDLE"] = ""  # Empty to disable curl certificate verification
+                env["SSL_CERT_FILE"] = ""    # Empty to disable Python SSL certificate verification
+                env["GIT_SSL_NO_VERIFY"] = "1"  # For git operations
+                env["npm_config_strict_ssl"] = "false"  # For npm
+                env["SSL_CERT_FILE"] = ""    # Empty to disable Python SSL certificate verification
                 
                 print(f"Starting VSCode tunnel with Proxytunnel using local port {config['local_port']}")
                 command = base_command
@@ -272,13 +279,34 @@ def start_tunnel_with_proxytunnel(proxy_url=None, proxy_port=None, proxy_user=No
                 print("Proxytunnel failed to start. Falling back to direct connection.")
                 use_proxytunnel = False
                 env = os.environ.copy()
+                # Disable SSL verification
+                env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+                env["CURL_CA_BUNDLE"] = ""
+                env["SSL_CERT_FILE"] = ""
+                env["GIT_SSL_NO_VERIFY"] = "1"
+                env["npm_config_strict_ssl"] = "false"
         else:
             command = base_command
             print("Starting VSCode tunnel directly (without Proxytunnel)")
             env = os.environ.copy()
+            # Disable SSL verification
+            env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+            env["CURL_CA_BUNDLE"] = ""
+            env["SSL_CERT_FILE"] = ""
+            env["GIT_SSL_NO_VERIFY"] = "1"
+            env["npm_config_strict_ssl"] = "false"
         
         # Start the process with both stdout and stderr captured
         print(f"Executing command: {command}")
+        
+        # Ensure SSL verification is disabled in the environment
+        if 'NODE_TLS_REJECT_UNAUTHORIZED' not in env:
+            env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        if 'CURL_CA_BUNDLE' not in env:
+            env["CURL_CA_BUNDLE"] = ""
+        if 'SSL_CERT_FILE' not in env:
+            env["SSL_CERT_FILE"] = ""
+        
         p = subprocess.Popen(
             command,
             shell=True,
@@ -608,7 +636,9 @@ def configure_proxytunnel(proxy_url, proxy_port, target_host="vscode.dev", targe
     proxytunnel_path = shutil.which("proxytunnel") or "./proxytunnel"
     
     # Create the proxytunnel command
-    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
+    # Add -n option to disable SSL certificate verification
+    # Add -v for verbose output to help with debugging
+    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port} -n -v"
     
     return {
         "command": command,
@@ -645,8 +675,10 @@ def configure_proxytunnel_advanced(proxy_url, proxy_port, target_host="vscode.de
     proxytunnel_path = shutil.which("proxytunnel") or "./proxytunnel"
     
     # Start building the command
+    # Add -n option to disable SSL certificate verification
+    # Add -v for verbose output to help with debugging
+    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port} -n -v"
     
-    command = f"{proxytunnel_path} -p {clean_proxy_url}:{proxy_port} -d {target_host}:{target_port} -a {local_port}"
     
     # Add authentication if provided
     if proxy_user and proxy_pass:
@@ -681,11 +713,7 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None
     
     # Prepare the command
     # Add --accept-server-license-terms to the command
-    base_command = "./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
-    
-    # If SSL verification is disabled, add the NODE_TLS_REJECT_UNAUTHORIZED=0 environment variable
-    if 'NODE_TLS_REJECT_UNAUTHORIZED' in os.environ and os.environ['NODE_TLS_REJECT_UNAUTHORIZED'] == '0':
-        base_command = "NODE_TLS_REJECT_UNAUTHORIZED=0 " + base_command
+    base_command = "NODE_TLS_REJECT_UNAUTHORIZED=0 ./code tunnel --verbose --accept-server-license-terms --name colab-connect --log debug"
     
     if use_proxychains:
         config_path = create_proxychains_config(
@@ -701,12 +729,20 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None
     
     # Start the process with both stdout and stderr captured
     print(f"Executing command: {command}")
+    
+    # Create environment with SSL verification disabled
+    env = os.environ.copy()
+    env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+    env["CURL_CA_BUNDLE"] = ""  # Empty to disable curl certificate verification
+    env["SSL_CERT_FILE"] = ""    # Empty to disable Python SSL certificate verification
+    
     p = subprocess.Popen(
         command,
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        universal_newlines=True
+        universal_newlines=True,
+        env=env
     )
     
     # Use separate threads to read stdout and stderr to avoid blocking
@@ -744,11 +780,13 @@ def start_tunnel(proxy_url=None, proxy_port=None, enable_proxy_dns=True) -> None
 def start_tunnel_direct():
     """Start the VSCode tunnel directly without proxychains-ng."""
     # Add --accept-server-license-terms to the command
-    command = "./code tunnel --accept-server-license-terms --verbose --name colab-connect --log debug"
+    command = "NODE_TLS_REJECT_UNAUTHORIZED=0 ./code tunnel --accept-server-license-terms --verbose --name colab-connect --log debug"
     
-    # If SSL verification is disabled, add the NODE_TLS_REJECT_UNAUTHORIZED=0 environment variable
-    if 'NODE_TLS_REJECT_UNAUTHORIZED' in os.environ and os.environ['NODE_TLS_REJECT_UNAUTHORIZED'] == '0':
-        command = "NODE_TLS_REJECT_UNAUTHORIZED=0 " + command
+    # Set environment variables to disable SSL verification
+    env = os.environ.copy()
+    env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+    env["CURL_CA_BUNDLE"] = ""  # Empty to disable curl certificate verification
+    env["SSL_CERT_FILE"] = ""    # Empty to disable Python SSL certificate verification
     print(f"Starting VSCode tunnel directly: {command}")
     
     p = subprocess.Popen(
@@ -756,7 +794,8 @@ def start_tunnel_direct():
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        universal_newlines=True
+        universal_newlines=True,
+        env=env
     )
     
     # Use separate threads to read stdout and stderr to avoid blocking
@@ -847,7 +886,12 @@ def colabconnect(proxy_url="proxy.company.com", proxy_port=8080,
     # Disable SSL verification if requested (not recommended for production)
     if disable_ssl_verification:
         print("Warning: SSL verification is disabled. This is not secure for production use.")
+        # Set multiple environment variables to disable SSL verification in different components
         os.environ["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+        os.environ["CURL_CA_BUNDLE"] = ""  # Empty to disable curl certificate verification
+        os.environ["SSL_CERT_FILE"] = ""    # Empty to disable Python SSL certificate verification
+        os.environ["GIT_SSL_NO_VERIFY"] = "1"  # For git operations
+        os.environ["npm_config_strict_ssl"] = "false"  # For npm
     
     print("Installing python libraries...")
     run("pip3 install --user flake8 black ipywidgets twine")
